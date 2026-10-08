@@ -17,6 +17,9 @@ import httpx
 
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_CLAUDE_MODEL = "claude-opus-5-5"
+# Low effort keeps answers inside Pokémon's clocks; raise it for Werewolf/Red Alert if you like.
+DEFAULT_CLAUDE_EFFORT = "low"
 REQUEST_TIMEOUT_SECONDS = 60.0
 
 
@@ -102,11 +105,80 @@ class OpenAIProvider:
         return data
 
 
+class ClaudeProvider:
+    """Claude Messages API with structured output (``output_config.format``),
+    via the official ``anthropic`` SDK. Like ``OpenAIProvider``, the key never
+    appears in ``repr``, logs, or error messages.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = DEFAULT_CLAUDE_MODEL,
+        *,
+        effort: str = DEFAULT_CLAUDE_EFFORT,
+        timeout: float = REQUEST_TIMEOUT_SECONDS,
+    ) -> None:
+        import anthropic
+
+        self.model = model
+        self._effort = effort
+        self._anthropic = anthropic
+        self._client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
+
+    def __repr__(self) -> str:
+        return f"ClaudeProvider(model={self.model!r})"
+
+    def complete_structured(
+        self, messages: list[dict], schema_name: str, schema: dict, *, timeout: float | None = None
+    ) -> dict:
+        # The agent builds OpenAI-style messages; Claude takes system text separately.
+        system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+        chat = [{"role": m["role"], "content": m["content"]} for m in messages if m["role"] != "system"]
+        # A clocked game (Pokémon) can't afford SDK retries past its deadline.
+        client = self._client.with_options(timeout=timeout, max_retries=0) if timeout is not None else self._client
+        try:
+            response = client.beta.messages.create(
+                model=self.model,
+                max_tokens=16000,
+                system=system,
+                messages=chat,
+                output_config={"effort": self._effort, "format": {"type": "json_schema", "schema": schema}},
+                betas=["server-side-fallback-2026-07-01"],
+                fallbacks="default",
+            )
+        except self._anthropic.APIStatusError as exc:
+            raise ProviderError(f"Claude request failed (HTTP {exc.status_code})") from None
+        except self._anthropic.APIError as exc:
+            raise ProviderError(f"Claude request failed ({type(exc).__name__})") from None
+        if response.stop_reason == "refusal":
+            raise ProviderError("the model refused to answer")
+        if response.stop_reason == "max_tokens":
+            raise ProviderError("the model's reply was cut off")
+        text = next((b.text for b in response.content if b.type == "text"), "")
+        try:
+            data = json.loads(text)
+        except ValueError:
+            raise ProviderError("the model's reply was not valid JSON") from None
+        if not isinstance(data, dict):
+            raise ProviderError("the model's reply was not a JSON object")
+        return data
+
+
 def provider_from_env() -> LLMProvider:
-    """``OPENAI_API_KEY`` (required), ``OPENAI_MODEL``, ``OPENAI_BASE_URL``."""
+    """Claude when ``ANTHROPIC_API_KEY`` is set (``CLAUDE_MODEL``, ``CLAUDE_EFFORT``
+    optional); otherwise OpenAI: ``OPENAI_API_KEY`` (required), ``OPENAI_MODEL``,
+    ``OPENAI_BASE_URL``."""
+    claude_key = os.environ.get("ANTHROPIC_API_KEY")
+    if claude_key:
+        return ClaudeProvider(
+            claude_key,
+            os.environ.get("CLAUDE_MODEL") or DEFAULT_CLAUDE_MODEL,
+            effort=os.environ.get("CLAUDE_EFFORT") or DEFAULT_CLAUDE_EFFORT,
+        )
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is not set — add it to your environment or the starter's .env.")
+        raise RuntimeError("Neither ANTHROPIC_API_KEY nor OPENAI_API_KEY is set — add one to your environment or the starter's .env.")
     return OpenAIProvider(
         api_key,
         os.environ.get("OPENAI_MODEL") or DEFAULT_OPENAI_MODEL,
