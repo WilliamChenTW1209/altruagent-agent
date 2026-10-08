@@ -961,3 +961,45 @@ def test_the_real_openai_provider_is_given_the_pokemon_timeout():
 
     assert seen[0] <= llm_agent.POKEMON_REQUEST_SECONDS
     assert seen[1] == providers.REQUEST_TIMEOUT_SECONDS
+
+
+# -- strategy files, draft model, single-target moves ---------------------------------------
+
+
+def test_a_single_legal_target_is_filled_in_whatever_the_model_answers():
+    provider = FakeProvider(_answer(slot_0={"option": 0, "target": None}, slot_1={"option": 0, "target": None}))
+
+    decision = _agent(provider).choose_action(_state(_doubles([_move("protect", [0])], [_move("ragepowder", [0])])), POKEMON)
+
+    assert decision.action["slot_0"] == {"type": "move", "move_id": "protect", "target": 0}
+    assert decision.action["slot_1"] == {"type": "move", "move_id": "ragepowder", "target": 0}
+    assert len(provider.calls) == 1
+
+
+def test_the_games_strategy_file_is_added_to_the_system_prompt(tmp_path, monkeypatch):
+    (tmp_path / "pokemon.md").write_text("Always lead with Tailwind.", encoding="utf-8")
+    monkeypatch.setattr(llm_agent, "STRATEGY_DIR", tmp_path)
+    observation = {"phase": "draft", "available_cards": [], "rosters": {}}
+    provider = FakeProvider(_answer(action_id="draft_pick:a"))
+
+    _agent(provider).choose_action(_state(*_draft("a"), phase="draft", observation=observation), POKEMON)
+
+    system = provider.calls[0]["messages"][0]["content"]
+    assert system.startswith(llm_agent._SYSTEM_PROMPT) and system.endswith("Always lead with Tailwind.")
+
+
+def test_no_strategy_file_keeps_the_base_prompt(tmp_path, monkeypatch):
+    monkeypatch.setattr(llm_agent, "STRATEGY_DIR", tmp_path)
+
+    assert llm_agent._system_prompt("werewolf") == llm_agent._SYSTEM_PROMPT
+
+
+def test_draft_picks_use_the_draft_provider_and_battles_the_main_one():
+    observation = {"phase": "draft", "available_cards": [], "rosters": {}}
+    main, draft = FakeProvider(_answer(slot_0={"option": 0, "target": None}, slot_1={"option": 0, "target": None})), FakeProvider(_answer(action_id="draft_pick:a"))
+    agent = _agent(main, draft_provider=draft)
+
+    agent.choose_action(_state(*_draft("a"), phase="draft", observation=observation), POKEMON)
+    agent.choose_action(_state(_doubles([_move("protect", [])], [{"type": "pass"}])), POKEMON)
+
+    assert len(draft.calls) == 1 and len(main.calls) == 1

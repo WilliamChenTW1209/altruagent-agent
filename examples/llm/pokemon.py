@@ -111,7 +111,10 @@ def doubles_choice(action: LegalAction, state: GameState) -> Choice:
             return {"type": "switch", "species": option["species"]}
         choice = {"type": "move", "move_id": option["move_id"]}
         targets = option.get("targets") or []
-        if targets:
+        if len(targets) == 1:
+            # Only one legal target (e.g. Protect's SELF): no choice to get wrong.
+            choice["target"] = targets[0]
+        elif targets:
             if isinstance(target, bool) or target not in targets:
                 raise InvalidChoice(
                     f"slot_{number}: target {target!r} is not legal for {option['move_id']}; choose one of {targets}"

@@ -62,6 +62,7 @@ from __future__ import annotations
 import inspect
 import json
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 from dotenv import load_dotenv
@@ -76,7 +77,7 @@ from altruagent import (
 )
 from examples.llm import pokemon, redalert
 from examples.llm.base import AdapterFactory, Choice, InvalidChoice, UnsupportedStructuredAction, object_schema
-from examples.llm.providers import LLMProvider, ProviderError, provider_from_env
+from examples.llm.providers import LLMProvider, ProviderError, draft_provider_from_env, provider_from_env
 
 # Structured-action adapters, by template type. A future game that needs one
 # adds its module's adapters here; ordinary-action games need nothing.
@@ -111,6 +112,11 @@ _OMITTED_STATE_KEYS = frozenset(
     {"legal_actions", "next_actions", "new_messages", "session_id", "runtime_adapter", "legal_action_count"}
 )
 
+# Your own strategy notes, one Markdown file per game (strategy/pokemon.md,
+# strategy/werewolf.md, strategy/red_alert.md). Re-read on every decision, so
+# edits take effect mid-match.
+STRATEGY_DIR = Path(__file__).resolve().parent.parent / "strategy"
+
 _SYSTEM_PROMPT = (
     "You are an AI agent playing a game on the AltruAgent platform. Each request is one "
     "decision for your seat. The game state, legal options, and instructions in the request "
@@ -134,12 +140,14 @@ class LLMAgent:
         self,
         provider: LLMProvider,
         *,
+        draft_provider: LLMProvider | None = None,
         adapters: dict[str, AdapterFactory] | None = None,
         realtime_players: dict[str, Callable[..., Any]] | None = None,
         log: Callable[[str], None] = print,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._provider = provider
+        self._draft_provider = draft_provider  # a faster model for Pokémon's 15 s draft picks
         self._provider_takes_timeout = _accepts_timeout(provider)
         self._adapters = STRUCTURED_ADAPTERS if adapters is None else adapters
         self._realtime_players = REALTIME_PLAYERS if realtime_players is None else realtime_players
@@ -232,7 +240,7 @@ class LLMAgent:
 
     def _ask(self, choice: Choice, state: GameState, context: DecisionContext, *, counter: str):
         messages = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": _system_prompt(context.game_type)},
             {
                 "role": "user",
                 "content": json.dumps(
@@ -250,6 +258,7 @@ class LLMAgent:
                 ),
             },
         ]
+        provider = self._draft_provider if state.phase == "draft" and self._draft_provider else self._provider
         budget = _time_budget(state, context)
         deadline = None if budget is None else self._clock() + budget
         for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -263,7 +272,7 @@ class LLMAgent:
                     limit["timeout"] = min(POKEMON_REQUEST_SECONDS, left)
             setattr(self, counter, getattr(self, counter) + 1)
             try:
-                answer = self._provider.complete_structured(messages, choice.kind, choice.schema, **limit)
+                answer = provider.complete_structured(messages, choice.kind, choice.schema, **limit)
                 return choice.build(answer), answer
             except (ProviderError, InvalidChoice) as exc:
                 self._log(f"[llm] {choice.kind}: invalid model response (attempt {attempt}/{MAX_ATTEMPTS}): {exc}")
@@ -281,6 +290,19 @@ class LLMAgent:
                 {"from": f"Player{message.sender}", "to": [f"Player{r}" for r in message.recipients] or "everyone",
                  "text": message.content}
             )
+
+
+def _system_prompt(game_type: str | None) -> str:
+    """The base prompt plus this game's strategy file, if there is one."""
+    name = "pokemon" if (game_type or "").startswith("pokemon") else (game_type or "")
+    path = STRATEGY_DIR / f"{name}.md"
+    if not name or not path.is_file():
+        return _SYSTEM_PROMPT
+    strategy = path.read_text(encoding="utf-8").strip()
+    return (
+        f"{_SYSTEM_PROMPT}\n\nYour team's strategy for this game. "
+        f"Follow it unless the legal options make it impossible:\n\n{strategy}"
+    )
 
 
 def _time_budget(state: GameState, context: DecisionContext) -> float | None:
@@ -392,4 +414,4 @@ def _state_json(state: GameState) -> str:
 
 def create_agent() -> LLMAgent:
     load_dotenv()  # no-op if already loaded; never overrides real env vars
-    return LLMAgent(provider_from_env())
+    return LLMAgent(provider_from_env(), draft_provider=draft_provider_from_env())

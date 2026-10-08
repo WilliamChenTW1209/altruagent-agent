@@ -141,7 +141,8 @@ class ClaudeProvider:
             response = client.beta.messages.create(
                 model=self.model,
                 max_tokens=16000,
-                system=system,
+                # Cached: the base prompt and strategy file repeat on every decision.
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                 messages=chat,
                 output_config={"effort": self._effort, "format": {"type": "json_schema", "schema": schema}},
                 betas=["server-side-fallback-2026-07-01"],
@@ -184,3 +185,12 @@ def provider_from_env() -> LLMProvider:
         os.environ.get("OPENAI_MODEL") or DEFAULT_OPENAI_MODEL,
         base_url=os.environ.get("OPENAI_BASE_URL") or DEFAULT_OPENAI_BASE_URL,
     )
+
+
+def draft_provider_from_env() -> LLMProvider | None:
+    """A faster Claude model for Pokémon draft picks (``CLAUDE_DRAFT_MODEL``),
+    or None to use the main model everywhere."""
+    claude_key, model = os.environ.get("ANTHROPIC_API_KEY"), os.environ.get("CLAUDE_DRAFT_MODEL")
+    if not (claude_key and model):
+        return None
+    return ClaudeProvider(claude_key, model, effort=os.environ.get("CLAUDE_EFFORT") or DEFAULT_CLAUDE_EFFORT)
