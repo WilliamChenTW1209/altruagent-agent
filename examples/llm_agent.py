@@ -169,12 +169,14 @@ class LLMAgent:
             return self._realtime_player(context).choose_action(state, context)
         self._remember(state)
         choice = self._action_choice(state)
+        started = self._clock()
         value, answer = self._ask(choice, state, context, counter="decision_calls")
+        took = f"{choice.kind} [{self._clock() - started:.1f}s]"
         if value is None:
-            self._log(f"[llm] {choice.kind}: FALLBACK to a default legal action (no valid model answer in time)")
+            self._log(f"[llm] {took}: FALLBACK to a default legal action (no valid model answer in time)")
             return WithReasoning(choice.fallback(), "Fallback: the model gave no valid answer, so a default legal action was played.")
         summary = str(answer.get("reasoning_summary") or "").strip()[:REASONING_CHAR_LIMIT]
-        self._log(f"[llm] {choice.kind}: {summary or '(no summary)'}")
+        self._log(f"[llm] {took}: {summary or '(no summary)'}")
         return WithReasoning(value, summary)
 
     def _action_choice(self, state: GameState) -> Choice:
