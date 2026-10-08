@@ -20,6 +20,7 @@ from altruagent import GameState, LegalAction
 from examples import smoke_agent
 
 from .base import Choice, InvalidChoice, object_schema
+from .typechart import describe, effectiveness
 
 
 def lineup_choice(action: LegalAction, state: GameState) -> Choice:
@@ -72,8 +73,39 @@ def _describe_target(target_option: dict) -> str:
     return template.format(species=species, target=target_option.get("target"))
 
 
-def _prompt_option(option: dict) -> dict:
-    """A slot option as the model sees it: every legal target named.
+def _norm(name: object) -> str:
+    return "".join(c for c in str(name).lower() if c.isalnum())
+
+
+def _species_types(node: object, found: dict | None = None) -> dict[str, list[str]]:
+    """Every Pokémon summary's types anywhere in the observation, by species id."""
+    found = {} if found is None else found
+    if isinstance(node, dict):
+        if node.get("species") and isinstance(node.get("types"), list):
+            found.setdefault(_norm(node["species"]), node["types"])
+        for value in node.values():
+            _species_types(value, found)
+    elif isinstance(node, list):
+        for value in node:
+            _species_types(value, found)
+    return found
+
+
+def _move_types(observation: dict, slot: int) -> dict[str, str]:
+    """This slot's damaging moves' types, by move id (status moves left out)."""
+    moves = observation.get("available_moves") or []
+    if moves and isinstance(moves[0], list):
+        moves = moves[slot] if slot < len(moves) else []
+    return {
+        _norm(m.get("id")): m["type"]
+        for m in moves
+        if isinstance(m, dict) and m.get("type") and str(m.get("category", "")).upper() != "STATUS"
+    }
+
+
+def _prompt_option(option: dict, move_types: dict | None = None, species_types: dict | None = None) -> dict:
+    """A slot option as the model sees it: every legal target named, and
+    each opponent target's type effectiveness computed for it.
 
     Only the prompt changes — `build` still validates against GameAPI's own
     numeric `targets`, and the integer is what gets sent back. A server too
@@ -82,10 +114,17 @@ def _prompt_option(option: dict) -> dict:
     target_options = option.get("target_options")
     if option.get("type") != "move" or not isinstance(target_options, list):
         return option
+    move_type = (move_types or {}).get(_norm(option.get("move_id")))
     shown = {k: v for k, v in option.items() if k not in ("targets", "target_options")}
-    shown["targets"] = [
-        {"target": t.get("target"), "is": _describe_target(t)} for t in target_options
-    ]
+    shown["targets"] = []
+    for t in target_options:
+        target = {"target": t.get("target"), "is": _describe_target(t)}
+        defender = (species_types or {}).get(_norm(t.get("species")))
+        if move_type and defender and t.get("side") == "opponent":
+            multiplier = effectiveness(move_type, defender)
+            if multiplier is not None:
+                target["type_effectiveness"] = describe(multiplier)
+        shown["targets"].append(target)
     return shown
 
 
@@ -94,6 +133,8 @@ def doubles_choice(action: LegalAction, state: GameState) -> Choice:
     template = action.input["action"]
     slots = sorted(template["slots"], key=lambda slot: slot.get("slot", 0))
     options = [slot["options"] for slot in slots]
+    observation = state.raw.get("observation") or {}
+    species_types = _species_types(observation)
     slot_schema = object_schema(
         {"option": {"type": "integer"}, "target": {"type": ["integer", "null"]}}, reasoning=False
     )
@@ -141,7 +182,8 @@ def doubles_choice(action: LegalAction, state: GameState) -> Choice:
                     "active": slot.get("active"),
                     "force_switch": slot.get("force_switch"),
                     "options": [
-                        {"option": index, **_prompt_option(option)} for index, option in enumerate(slot["options"])
+                        {"option": index, **_prompt_option(option, _move_types(observation, number), species_types)}
+                        for index, option in enumerate(slot["options"])
                     ],
                 }
                 for number, slot in enumerate(slots)
@@ -152,6 +194,8 @@ def doubles_choice(action: LegalAction, state: GameState) -> Choice:
                 "For a move whose targets list is non-empty, target must be one of those integers; "
                 "otherwise target is null. Both slots cannot switch into the same Pokémon. "
                 f"{TARGET_GUIDE} "
+                "type_effectiveness is computed from types only (abilities, items and "
+                "field effects are not counted); trust it over your own type math. "
                 f"Server instructions: {template.get('instructions')}"
             ),
         },

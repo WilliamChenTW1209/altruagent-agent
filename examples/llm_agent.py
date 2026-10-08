@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -262,6 +263,9 @@ class LLMAgent:
             },
         ]
         provider = self._draft_provider if state.phase == "draft" and self._draft_provider else self._provider
+        if os.environ.get("LLM_DUMP_PROMPTS"):  # debugging: append each prompt to that file
+            with open(os.environ["LLM_DUMP_PROMPTS"], "a", encoding="utf-8") as dump:
+                dump.write(messages[1]["content"] + "\n")
         budget = _time_budget(state, context)
         deadline = None if budget is None else self._clock() + budget
         for attempt in range(1, MAX_ATTEMPTS + 1):

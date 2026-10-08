@@ -1018,3 +1018,41 @@ def test_a_stuck_draft_request_gives_up_early_and_the_retry_still_picks():
     assert decision.action.action_id == "draft_pick:b"
     assert provider.timeouts[0] == llm_agent.POKEMON_DRAFT_REQUEST_SECONDS
     assert clock["t"] <= llm_agent.POKEMON_DRAFT_SECONDS
+
+
+# -- type effectiveness in the doubles prompt -------------------------------------------------
+
+
+def test_type_chart_multiplies_dual_types_and_knows_immunities():
+    from examples.llm.typechart import effectiveness
+
+    assert effectiveness("FAIRY", ["DARK", "STEEL"]) == 1  # Kingambit: 2x * 0.5x
+    assert effectiveness("FIGHTING", ["DARK", "STEEL"]) == 4
+    assert effectiveness("GROUND", ["WATER", "FLYING"]) == 0
+    assert effectiveness("fire", ["grass"]) == 2
+    assert effectiveness("SHADOW", ["NORMAL"]) is None
+
+
+def test_doubles_prompt_shows_type_effectiveness_for_opponent_targets_only():
+    flare_blitz = _named_move("flareblitz", [
+        {"target": -2, "side": "ally", "species": "rillaboom"},
+        {"target": 1, "side": "opponent", "species": "kingambit"},
+        {"target": 2, "side": "opponent", "species": "Urshifu-Rapid-Strike"},
+    ])
+    observation = {
+        "is_doubles": True,
+        "available_moves": [[{"id": "flareblitz", "type": "FIRE", "category": "PHYSICAL"}], []],
+        "opponent_active_pokemon": [
+            {"species": "Kingambit", "types": ["DARK", "STEEL"]},
+            {"species": "Urshifu-Rapid-Strike", "types": ["FIGHTING", "WATER"]},
+        ],
+        "active_pokemon": [{"species": "Rillaboom", "types": ["GRASS"]}],
+    }
+    provider = FakeProvider(_answer(slot_0={"option": 0, "target": 1}, slot_1={"option": 0, "target": None}))
+
+    _agent(provider).choose_action(_state(_doubles([flare_blitz], [PASS]), observation=observation), POKEMON)
+
+    targets = provider.prompt()["slots"][0]["options"][0]["targets"]
+    assert "type_effectiveness" not in targets[0]
+    assert targets[1]["type_effectiveness"] == "2x (super effective)"
+    assert targets[2]["type_effectiveness"] == "0.5x (not very effective)"
