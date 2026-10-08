@@ -188,9 +188,10 @@ def provider_from_env() -> LLMProvider:
 
 
 def draft_provider_from_env() -> LLMProvider | None:
-    """A faster Claude model for Pokémon draft picks (``CLAUDE_DRAFT_MODEL``),
+    """A faster Claude model for Pokémon draft picks (``CLAUDE_DRAFT_MODEL``,
+    ``CLAUDE_DRAFT_EFFORT``),
     or None to use the main model everywhere."""
     claude_key, model = os.environ.get("ANTHROPIC_API_KEY"), os.environ.get("CLAUDE_DRAFT_MODEL")
     if not (claude_key and model):
         return None
-    return ClaudeProvider(claude_key, model, effort=os.environ.get("CLAUDE_EFFORT") or DEFAULT_CLAUDE_EFFORT)
+    return ClaudeProvider(claude_key, model, effort=os.environ.get("CLAUDE_DRAFT_EFFORT") or DEFAULT_CLAUDE_EFFORT)

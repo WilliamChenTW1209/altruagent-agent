@@ -104,6 +104,7 @@ TRANSCRIPT_LIMIT = 30
 POKEMON_DECISION_SECONDS = 40.0
 POKEMON_DRAFT_SECONDS = 10.0
 POKEMON_REQUEST_SECONDS = 25.0
+POKEMON_DRAFT_REQUEST_SECONDS = 6.0  # draft picks take ~3 s; a stuck request still leaves time to retry
 MIN_ATTEMPT_SECONDS = 3.0  # less time left than this: play the fallback now
 
 # Keys of GameAPI's state payload the model doesn't need (options are sent
@@ -271,7 +272,8 @@ class LLMAgent:
                     self._log(f"[llm] {choice.kind}: out of time for another model call")
                     break
                 if self._provider_takes_timeout:
-                    limit["timeout"] = min(POKEMON_REQUEST_SECONDS, left)
+                    cap = POKEMON_DRAFT_REQUEST_SECONDS if state.phase == "draft" else POKEMON_REQUEST_SECONDS
+                    limit["timeout"] = min(cap, left)
             setattr(self, counter, getattr(self, counter) + 1)
             try:
                 answer = provider.complete_structured(messages, choice.kind, choice.schema, **limit)

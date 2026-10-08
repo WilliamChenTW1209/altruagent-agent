@@ -900,7 +900,8 @@ def test_a_draft_pick_fits_its_15_seconds():
 
     assert decision.action.action_id == "draft_pick:a"
     assert clock["t"] <= llm_agent.POKEMON_DRAFT_SECONDS < 15
-    assert provider.timeouts[0] == llm_agent.POKEMON_DRAFT_SECONDS
+    assert provider.timeouts == [llm_agent.POKEMON_DRAFT_REQUEST_SECONDS,
+                                 llm_agent.POKEMON_DRAFT_SECONDS - llm_agent.POKEMON_DRAFT_REQUEST_SECONDS]
 
 
 def test_werewolf_keeps_its_old_timing():
@@ -1003,3 +1004,17 @@ def test_draft_picks_use_the_draft_provider_and_battles_the_main_one():
     agent.choose_action(_state(_doubles([_move("protect", [])], [{"type": "pass"}])), POKEMON)
 
     assert len(draft.calls) == 1 and len(main.calls) == 1
+
+
+def test_a_stuck_draft_request_gives_up_early_and_the_retry_still_picks():
+    clock = {"t": 0.0}
+    observation = {"phase": "draft", "available_cards": [], "rosters": {}}
+    provider = TimedProvider(clock, (999, None), (3, _answer(action_id="draft_pick:b")))
+
+    decision = _timed_agent(provider, clock).choose_action(
+        _state(*_draft("a", "b"), phase="draft", observation=observation), POKEMON
+    )
+
+    assert decision.action.action_id == "draft_pick:b"
+    assert provider.timeouts[0] == llm_agent.POKEMON_DRAFT_REQUEST_SECONDS
+    assert clock["t"] <= llm_agent.POKEMON_DRAFT_SECONDS
