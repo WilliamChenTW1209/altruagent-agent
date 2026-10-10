@@ -260,6 +260,31 @@ def _obs_tick(state: dict[str, Any]) -> int | None:
     return tick if _is_int(tick) else None
 
 
+STATUS_EVERY_SECONDS = 30.0
+
+
+def status_line(state: dict[str, Any]) -> str:
+    """One line of the match's situation, for a human watching the log."""
+    obs = _dict(state.get("observation"))
+    eco, mil = _dict(obs.get("economy")), _dict(obs.get("military"))
+    units = [u for u in _list(obs, "units") if not u.get("wreck")]
+    buildings = _list(obs, "buildings")
+    enemies = [e for e in _list(obs, "visible_enemies") if not e.get("wreck")]
+    enemy_buildings = [e for e in _list(obs, "visible_enemy_buildings") if not e.get("wreck")]
+    tick = _obs_tick(state) or 0
+    left = _dict(state.get("time")).get("remaining_seconds")
+    clock = f"{tick // 25 // 60}:{tick // 25 % 60:02d}" + (f" (left {int(left) // 60}:{int(left) % 60:02d})" if _is_int(left) else "")
+    kd = (mil.get("kills_cost") or 0) - (mil.get("deaths_cost") or 0)
+    queue = ",".join(str(p.get("item")) for p in _list(obs, "production")[:4]) or "-"
+    return (
+        f"[status] {clock} {obs.get('faction', '?')} | cash {eco.get('cash', '?')} "
+        f"power {eco.get('power_provided', '?')}/{eco.get('power_drained', '?')} harv {eco.get('harvesters', '?')} | "
+        f"units {len(units)} bldgs {len(buildings)} army ${mil.get('army_value', '?')} | "
+        f"kills ${mil.get('kills_cost', 0)} losses ${mil.get('deaths_cost', 0)} (net {kd:+}) | "
+        f"enemy seen: {len(enemies)} units {len(enemy_buildings)} bldgs | queue {queue}"
+    )
+
+
 def find_map_info(config: dict[str, Any] | None, map_id: str | None) -> dict[str, Any] | None:
     """The map's entry (width/height/bounds/spawns) in ``get_game_config``'s ``rules.maps``."""
     entry = _dict(_dict(_dict(config).get("rules")).get("maps")).get(map_id or "")
@@ -761,6 +786,7 @@ class RedAlertPlayer:
         self._refusals: dict[str, dict[str, Any]] = {}
         self._errors_in_row = 0
         self._backoff_until = 0.0
+        self._next_status = 0.0
 
     def stats(self) -> dict[str, Any]:
         return {
@@ -778,6 +804,9 @@ class RedAlertPlayer:
         raw = state.raw
         if not isinstance(raw.get("observation"), dict):
             return WAIT  # nothing to look at yet
+        if self._clock() >= self._next_status:
+            self._next_status = self._clock() + STATUS_EVERY_SECONDS
+            self._log(status_line(raw))
         self._use_config(context.game_config)
         if self.calls >= self.max_calls:
             return self._fallback(FALLBACK_CAP)
