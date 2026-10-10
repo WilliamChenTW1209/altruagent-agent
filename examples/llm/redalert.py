@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
@@ -45,6 +46,7 @@ from altruagent import WAIT, DecisionContext, GameState, WithReasoning
 
 from .base import object_schema
 from .providers import LLMProvider, ProviderError
+from .redalert_autopilot import AUTOPILOT_NOTE, Autopilot, drop_model_duplicates
 
 # Your own strategy notes, re-read on every decision so edits apply mid-match.
 STRATEGY_FILE = Path(__file__).resolve().parents[2] / "strategy" / "red_alert.md"
@@ -283,6 +285,13 @@ def status_line(state: dict[str, Any]) -> str:
         f"kills ${mil.get('kills_cost', 0)} losses ${mil.get('deaths_cost', 0)} (net {kd:+}) | "
         f"enemy seen: {len(enemies)} units {len(enemy_buildings)} bldgs | queue {queue}"
     )
+
+
+def _short(order: dict[str, Any]) -> str:
+    """An order in a few words, for the log."""
+    detail = order.get("item") or (f"{len(order['units'])} unit(s)" if order.get("units") else "")
+    to = f" -> {order['to']}" if order.get("to") else ""
+    return f"{order.get('cmd')} {detail}{to}".strip()
 
 
 def find_map_info(config: dict[str, Any] | None, map_id: str | None) -> dict[str, Any] | None:
@@ -757,8 +766,16 @@ class RedAlertPlayer:
         log: Callable[[str], None] = print,
         max_calls: int = MAX_CALLS,
         clock: Callable[[], float] = time.monotonic,
+        autopilot: bool = False,
+        background: bool = False,
     ) -> None:
         self._provider = provider
+        # autopilot: code sends the reflex orders (redalert_autopilot) on every view.
+        # background: the model thinks in a worker thread, so a slow answer never
+        # holds up those reflexes; its orders join the next batch when they arrive.
+        self._autopilot = Autopilot() if autopilot else None
+        self._pool = ThreadPoolExecutor(max_workers=1) if background else None
+        self._future: Future | None = None
         self._log = log
         self.max_calls = max_calls
         self._clock = clock
@@ -808,6 +825,38 @@ class RedAlertPlayer:
             self._next_status = self._clock() + STATUS_EVERY_SECONDS
             self._log(status_line(raw))
         self._use_config(context.game_config)
+        decision = self._background_decision(raw) if self._pool else self._model_decision(raw)
+        if self._autopilot is None:
+            return decision
+        auto = self._autopilot.orders(raw, self._clock())
+        model_orders, summary = [], None
+        if isinstance(decision, WithReasoning):
+            model_orders = drop_model_duplicates(decision.action["orders"], raw)
+            summary = decision.reasoning_summary
+        orders = (auto + model_orders)[: _limits(raw)["max_orders_per_batch"]]
+        if auto:
+            self._log("[auto] " + "; ".join(_short(o) for o in auto))
+        if not orders:
+            return WAIT
+        self._last_sent = orders
+        return WithReasoning({"type": "orders", "orders": orders}, summary or "Autopilot: " + "; ".join(_short(o) for o in auto))
+
+    def _background_decision(self, raw: dict[str, Any]):
+        """The model's newest finished answer (or WAIT), and a new question
+        started with this view whenever none is in flight."""
+        decision = WAIT
+        if self._future is not None and self._future.done():
+            future, self._future = self._future, None
+            try:
+                decision = future.result()
+            except Exception as exc:  # a bug in the worker must not stop the reflexes
+                self._log(f"[llm] red_alert: model step failed: {exc!r}")
+        if self._future is None:
+            self._future = self._pool.submit(self._model_decision, raw)
+        return decision
+
+    def _model_decision(self, raw: dict[str, Any]):
+        """One model call on this view: WithReasoning(orders) or WAIT."""
         if self.calls >= self.max_calls:
             return self._fallback(FALLBACK_CAP)
         if self._clock() < self._backoff_until:
@@ -949,6 +998,8 @@ class RedAlertPlayer:
     def _system_prompt(self) -> str:
         if self._system is None:
             self._system = build_system_prompt(self._config)
+            if self._autopilot is not None:
+                self._system += "\n\n" + AUTOPILOT_NOTE
         if not STRATEGY_FILE.is_file():
             return self._system
         strategy = STRATEGY_FILE.read_text(encoding="utf-8").strip()

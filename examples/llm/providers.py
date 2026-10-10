@@ -199,3 +199,12 @@ def draft_provider_from_env() -> LLMProvider | None:
     if not (claude_key and model):
         return None
     return ClaudeProvider(claude_key, model, effort=os.environ.get("CLAUDE_DRAFT_EFFORT") or DEFAULT_CLAUDE_EFFORT)
+
+
+def realtime_provider_from_env() -> LLMProvider | None:
+    """A faster Claude model for real-time games like Red Alert
+    (``CLAUDE_REALTIME_MODEL``, ``CLAUDE_REALTIME_EFFORT``), or None to use the main model."""
+    claude_key, model = os.environ.get("ANTHROPIC_API_KEY"), os.environ.get("CLAUDE_REALTIME_MODEL")
+    if not (claude_key and model):
+        return None
+    return ClaudeProvider(claude_key, model, effort=os.environ.get("CLAUDE_REALTIME_EFFORT") or DEFAULT_CLAUDE_EFFORT)

@@ -78,7 +78,13 @@ from altruagent import (
 )
 from examples.llm import pokemon, redalert
 from examples.llm.base import AdapterFactory, Choice, InvalidChoice, UnsupportedStructuredAction, object_schema
-from examples.llm.providers import LLMProvider, ProviderError, draft_provider_from_env, provider_from_env
+from examples.llm.providers import (
+    LLMProvider,
+    ProviderError,
+    draft_provider_from_env,
+    provider_from_env,
+    realtime_provider_from_env,
+)
 
 # Structured-action adapters, by template type. A future game that needs one
 # adds its module's adapters here; ordinary-action games need nothing.
@@ -422,4 +428,12 @@ def _state_json(state: GameState) -> str:
 
 def create_agent() -> LLMAgent:
     load_dotenv()  # no-op if already loaded; never overrides real env vars
-    return LLMAgent(provider_from_env(), draft_provider=draft_provider_from_env())
+    realtime = realtime_provider_from_env()
+
+    def red_alert(provider: LLMProvider, **kwargs: Any) -> redalert.RedAlertPlayer:
+        # Code plays the reflexes on every view; the model plans in the background.
+        return redalert.RedAlertPlayer(realtime or provider, autopilot=True, background=True, **kwargs)
+
+    return LLMAgent(
+        provider_from_env(), draft_provider=draft_provider_from_env(), realtime_players={"red_alert": red_alert}
+    )
