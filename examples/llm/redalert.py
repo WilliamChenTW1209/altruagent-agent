@@ -307,9 +307,21 @@ def order_fields(config: dict[str, Any] | None) -> dict[str, tuple[frozenset[str
     return fields
 
 
-def answer_schema(fields: dict[str, tuple[frozenset[str], frozenset[str]]]) -> dict:
+def answer_schema(fields: dict[str, tuple[frozenset[str], frozenset[str]]], *, flat: bool = False) -> dict:
     """The model's strict answer: ``orders`` (one object shape per command;
-    optional fields are present but may be null) and ``reasoning_summary``."""
+    optional fields are present but may be null) and ``reasoning_summary``.
+
+    ``flat``: one shape for every command instead (``cmd`` an enum, every field
+    nullable), for providers whose grammar compiler rejects the per-command
+    union as too large (Claude). ``validate_orders`` still checks each order's
+    fields against its command, so the looser schema lets nothing through."""
+    if flat:
+        names = sorted(set().union(*(required | optional for required, optional in fields.values())))
+        props: dict[str, Any] = {"cmd": {"type": "string", "enum": sorted(fields)}}
+        for name in _field_order(frozenset(names)):
+            props[name] = {"anyOf": [FIELD_SCHEMAS.get(name, {"type": "string"}), {"type": "null"}]}
+        item = {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
+        return object_schema({"orders": {"type": "array", "items": item}})
     shapes = []
     for cmd, (required, optional) in fields.items():
         props: dict[str, Any] = {"cmd": {"type": "string", "enum": [cmd]}}
@@ -732,8 +744,9 @@ class RedAlertPlayer:
         self.orders_dropped = 0
         self.orders_blocked = 0
         self._config: dict[str, Any] | None = None
+        self._flat = bool(getattr(provider, "needs_flat_schemas", False))
         self._fields = order_fields(None)
-        self._schema = answer_schema(self._fields)
+        self._schema = answer_schema(self._fields, flat=self._flat)
         self._system: str | None = None
         self._map_id: str | None = None
         self._map_info: dict[str, Any] | None = None
@@ -900,7 +913,7 @@ class RedAlertPlayer:
             return
         self._config = config
         self._fields = order_fields(config)
-        self._schema = answer_schema(self._fields)
+        self._schema = answer_schema(self._fields, flat=self._flat)
         self._system = None
         self._map_id = None
 

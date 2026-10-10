@@ -126,6 +126,10 @@ class ClaudeProvider:
         self._anthropic = anthropic
         self._client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
 
+    # Claude's structured-output compiler rejects large anyOf unions (Red Alert's
+    # per-command order shapes) as "compiled grammar is too large".
+    needs_flat_schemas = True
+
     def __repr__(self) -> str:
         return f"ClaudeProvider(model={self.model!r})"
 
