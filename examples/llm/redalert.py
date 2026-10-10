@@ -46,7 +46,7 @@ from altruagent import WAIT, DecisionContext, GameState, WithReasoning
 
 from .base import object_schema
 from .providers import LLMProvider, ProviderError
-from .redalert_autopilot import AUTOPILOT_NOTE, Autopilot, drop_model_duplicates, gate_model_spending
+from .redalert_autopilot import AUTOPILOT_NOTE, Autopilot, drop_model_duplicates, gate_model_spending, upgrade_tanks
 
 # Your own strategy notes, re-read on every decision so edits apply mid-match.
 STRATEGY_FILE = Path(__file__).resolve().parents[2] / "strategy" / "red_alert.md"
@@ -278,12 +278,16 @@ def status_line(state: dict[str, Any]) -> str:
     clock = f"{tick // 25 // 60}:{tick // 25 % 60:02d}" + (f" (left {int(left) // 60}:{int(left) % 60:02d})" if _is_int(left) else "")
     kd = (mil.get("kills_cost") or 0) - (mil.get("deaths_cost") or 0)
     queue = ",".join(str(p.get("item")) for p in _list(obs, "production")[:4]) or "-"
+    counts: dict[str, int] = {}
+    for e in enemies:
+        counts[str(e.get("type"))] = counts.get(str(e.get("type")), 0) + 1
+    army = " ".join(f"{t}x{n}" for t, n in sorted(counts.items(), key=lambda kv: -kv[1])[:6]) or "none"
     return (
-        f"[status] {clock} {obs.get('faction', '?')} | cash {eco.get('cash', '?')} "
+        f"[status] {clock} {obs.get('faction', '?')} | cash {eco.get('cash', '?')}+ore {eco.get('ore', '?')} "
         f"power {eco.get('power_provided', '?')}/{eco.get('power_drained', '?')} harv {eco.get('harvesters', '?')} | "
         f"units {len(units)} bldgs {len(buildings)} army ${mil.get('army_value', '?')} | "
         f"kills ${mil.get('kills_cost', 0)} losses ${mil.get('deaths_cost', 0)} (net {kd:+}) | "
-        f"enemy seen: {len(enemies)} units {len(enemy_buildings)} bldgs | queue {queue}"
+        f"enemy seen: {len(enemies)} units ({army}) {len(enemy_buildings)} bldgs | queue {queue}"
     )
 
 
@@ -831,7 +835,7 @@ class RedAlertPlayer:
         auto = self._autopilot.orders(raw, self._clock())
         model_orders, summary = [], None
         if isinstance(decision, WithReasoning):
-            model_orders = gate_model_spending(drop_model_duplicates(decision.action["orders"], raw), raw)
+            model_orders = upgrade_tanks(gate_model_spending(drop_model_duplicates(decision.action["orders"], raw), raw), raw)
             summary = decision.reasoning_summary
         orders = (auto + model_orders)[: _limits(raw)["max_orders_per_batch"]]
         if auto:

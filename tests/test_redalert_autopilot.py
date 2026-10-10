@@ -163,3 +163,38 @@ def test_model_spending_is_gated_until_the_economy_is_up():
     ready = _raw(buildings=["fact", "powr", "tent", "proc", "proc", "weap"],
                  units=[{"id": i, "type": "harv"} for i in range(3)])
     assert gate_model_spending(model, ready) == model
+
+
+def test_a_harvester_attacked_far_from_home_is_defended():
+    harvester = {"id": 40, "type": "harv", "x": 80, "y": 80}
+    raw = _raw(buildings=["fact"], units=[harvester], legal={"combat_units": [21]}, tick=1000,
+               events=[{"kind": "under_attack", "tick": 995, "actor": 40}])
+
+    assert Autopilot().orders(raw, 0.0) == [{"cmd": "attack_move", "units": [21], "to": [80, 80]}]
+
+
+def test_queued_infantry_counts_toward_the_early_cap():
+    from examples.llm.redalert_autopilot import gate_model_spending
+
+    raw = _raw(buildings=["fact", "powr", "tent", "proc"], production=[{"item": "e1"}, {"item": "e1"}, {"item": "e1"}])
+
+    assert gate_model_spending([{"cmd": "train", "item": "e1", "count": 3}], raw) == []
+
+
+def test_light_tanks_are_upgraded_once_medium_tanks_can_be_built():
+    from examples.llm.redalert_autopilot import upgrade_tanks
+
+    order = [{"cmd": "train", "item": "1tnk", "count": 2}]
+
+    assert upgrade_tanks(order, _raw(available=["1tnk"])) == order
+    assert upgrade_tanks(order, _raw(available=["1tnk", "2tnk"])) == [{"cmd": "train", "item": "2tnk", "count": 2}]
+
+
+def test_status_line_shows_ore_and_the_enemy_army():
+    raw = _raw()
+    raw["observation"]["economy"]["ore"] = 450
+    raw["observation"]["visible_enemies"] = [{"type": "3tnk"}, {"type": "3tnk"}, {"type": "e3"}, {"type": "x", "wreck": True}]
+
+    line = redalert.status_line(raw)
+
+    assert "cash 3000+ore 450" in line and "(3tnkx2 e3x1)" in line

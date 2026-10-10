@@ -43,6 +43,7 @@ AUTOPILOT_NOTE = (
     "two refineries, war factory) and harvesters up to 3, and sending idle combat units to defend "
     "what is under attack near home. Do NOT order those yourself. Until that core is up, your "
     "build orders and all training beyond 3 infantry are dropped, so the cash goes to the economy. "
+    "Once 2tnk can be built, any 1tnk you order is trained as 2tnk. "
     "Your job is the army and the plan: "
     "which units and defenses to build, extra production buildings and tech, scouting, and "
     "when and where to attack or retreat."
@@ -122,10 +123,12 @@ class Autopilot:
             return []
         # Only what is attacked near home: a scout hit at the enemy base must not
         # pull the whole army after it.
+        # Harvesters are the exception: they are the economy, defend them anywhere.
         base = obs.get("base_center")
+        harvesters = {u.get("id") for u in _list(obs.get("units")) if str(u.get("type", "")).lower() == HARVESTER}
         for alert in reversed(alerts):
             cell = _cell_of(alert, obs)
-            if cell and _near(cell, base):
+            if cell and (_near(cell, base) or _actor_id(alert) in harvesters):
                 return [{"cmd": "attack_move", "units": defenders, "to": list(cell)}]
         return []
 
@@ -144,11 +147,15 @@ def _near(cell: tuple[int, int], base: Any) -> bool:
     return max(abs(cell[0] - base[0]), abs(cell[1] - base[1])) <= HOME_RADIUS
 
 
+def _actor_id(event: dict[str, Any]) -> int | None:
+    return next((event[k] for k in ("actor", "actor_id", "id", "building", "unit") if isinstance(event.get(k), int)), None)
+
+
 def _cell_of(event: dict[str, Any], obs: dict[str, Any]) -> tuple[int, int] | None:
     """Where an event happened: its own x/y, else its actor's position."""
     if isinstance(event.get("x"), int) and isinstance(event.get("y"), int):
         return event["x"], event["y"]
-    actor_id = next((event[k] for k in ("actor", "actor_id", "id", "building", "unit") if isinstance(event.get(k), int)), None)
+    actor_id = _actor_id(event)
     for actor in _list(obs.get("buildings")) + _list(obs.get("units")):
         if actor.get("id") == actor_id and isinstance(actor.get("x"), int) and isinstance(actor.get("y"), int):
             return actor["x"], actor["y"]
@@ -175,7 +182,9 @@ def gate_model_spending(model_orders: list[dict[str, Any]], state: dict[str, Any
     if economy_ready(state):
         return model_orders
     obs = _dict(state.get("observation"))
-    infantry = sum(1 for t in _types(_list(obs.get("units"))) if t in INFANTRY)
+    infantry = sum(1 for t in _types(_list(obs.get("units"))) if t in INFANTRY) + sum(
+        1 for p in _list(obs.get("production")) if str(p.get("item", "")).lower() in INFANTRY
+    )
     kept = []
     for order in model_orders:
         if order.get("cmd") == "build":
@@ -188,6 +197,21 @@ def gate_model_spending(model_orders: list[dict[str, Any]], state: dict[str, Any
             infantry += order["count"]
         kept.append(order)
     return kept
+
+
+TANK_UPGRADES = {"1tnk": ("2tnk",)}  # light tank -> what replaces it once available
+
+
+def upgrade_tanks(model_orders: list[dict[str, Any]], state: dict[str, Any]) -> list[dict[str, Any]]:
+    """A ``train 1tnk`` becomes ``2tnk`` once that can be built: light tanks
+    lost head-on to heavy ones, and the model kept ordering them."""
+    available = {str(i).lower() for i in _dict(state.get("observation")).get("available_production") or []}
+    out = []
+    for order in model_orders:
+        item = str(order.get("item", "")).lower()
+        better = next((b for b in TANK_UPGRADES.get(item, ()) if b in available), None)
+        out.append({**order, "item": better} if order.get("cmd") == "train" and better else order)
+    return out
 
 
 def drop_model_duplicates(model_orders: list[dict[str, Any]], state: dict[str, Any]) -> list[dict[str, Any]]:
