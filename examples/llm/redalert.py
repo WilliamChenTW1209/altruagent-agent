@@ -38,12 +38,17 @@ from __future__ import annotations
 import json
 import re
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 from altruagent import WAIT, DecisionContext, GameState, WithReasoning
 
 from .base import object_schema
 from .providers import LLMProvider, ProviderError
+
+# Your own strategy notes, re-read on every decision so edits apply mid-match.
+STRATEGY_FILE = Path(__file__).resolve().parents[2] / "strategy" / "red_alert.md"
+STRATEGY_HEADER = "YOUR TEAM'S STRATEGY (follow it unless the state makes it impossible)"
 
 # A cost guard sized for a whole 20-minute match at one answer every 0.5 s.
 MAX_CALLS = 2400
@@ -902,7 +907,10 @@ class RedAlertPlayer:
     def _system_prompt(self) -> str:
         if self._system is None:
             self._system = build_system_prompt(self._config)
-        return self._system
+        if not STRATEGY_FILE.is_file():
+            return self._system
+        strategy = STRATEGY_FILE.read_text(encoding="utf-8").strip()
+        return f"{self._system}\n\n{STRATEGY_HEADER}\n{strategy}"
 
     def _map(self, raw: dict[str, Any]) -> dict[str, Any] | None:
         map_id = _dict(raw.get("map")).get("id")

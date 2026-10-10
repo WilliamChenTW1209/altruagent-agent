@@ -516,3 +516,16 @@ def test_a_definite_refusal_while_reading_the_config_still_stops_the_game():
     game.queue_state(ra_state(100))
     with pytest.raises(OfficialAgentError):
         run_game(game, RED_ALERT, Recorder(ORDERS), sleep=lambda s: None)
+
+
+def test_red_alert_strategy_file_is_appended_and_reread(tmp_path, monkeypatch):
+    strategy = tmp_path / "red_alert.md"
+    monkeypatch.setattr(redalert, "STRATEGY_FILE", strategy)
+    player = _player(FakeProvider())
+    assert redalert.STRATEGY_HEADER not in player._system_prompt()
+
+    strategy.write_text("Rush with rifles.", encoding="utf-8")
+    assert player._system_prompt().endswith(f"{redalert.STRATEGY_HEADER}\nRush with rifles.")
+
+    strategy.write_text("Turtle and tech.", encoding="utf-8")
+    assert player._system_prompt().endswith("Turtle and tech.")
