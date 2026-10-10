@@ -46,7 +46,7 @@ from altruagent import WAIT, DecisionContext, GameState, WithReasoning
 
 from .base import object_schema
 from .providers import LLMProvider, ProviderError
-from .redalert_autopilot import AUTOPILOT_NOTE, Autopilot, drop_model_duplicates
+from .redalert_autopilot import AUTOPILOT_NOTE, Autopilot, drop_model_duplicates, gate_model_spending
 
 # Your own strategy notes, re-read on every decision so edits apply mid-match.
 STRATEGY_FILE = Path(__file__).resolve().parents[2] / "strategy" / "red_alert.md"
@@ -831,7 +831,7 @@ class RedAlertPlayer:
         auto = self._autopilot.orders(raw, self._clock())
         model_orders, summary = [], None
         if isinstance(decision, WithReasoning):
-            model_orders = drop_model_duplicates(decision.action["orders"], raw)
+            model_orders = gate_model_spending(drop_model_duplicates(decision.action["orders"], raw), raw)
             summary = decision.reasoning_summary
         orders = (auto + model_orders)[: _limits(raw)["max_orders_per_batch"]]
         if auto:

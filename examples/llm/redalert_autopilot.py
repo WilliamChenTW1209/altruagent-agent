@@ -28,6 +28,9 @@ MCV = "mcv"
 CONSTRUCTION_YARD = "fact"
 
 TARGET_HARVESTERS = 3
+TARGET_REFINERIES = 2  # each comes with a free harvester, and needs no war factory
+EARLY_INFANTRY = 3  # what the model may train before the economy is up
+INFANTRY = ("e1", "e2", "e3", "e4", "e6", "dog", "medi", "spy", "thf")
 POWER_MARGIN = 40  # build a power plant when spare power falls below this
 REPEAT_SECONDS = 3.0  # don't resend the same autopilot order sooner (verdicts lag)
 UNDER_ATTACK_TICKS = 25 * 6  # react to under_attack events from the last 6 s
@@ -37,8 +40,10 @@ HOME_RADIUS = 20  # cells from base_center that count as home for defending
 AUTOPILOT_NOTE = (
     "AUTOPILOT: code already handles, on every view and without you: deploying the MCV, "
     "placing every finished building, power plants, the economic core (power plant, barracks, "
-    "refinery, war factory) and harvesters up to 3, and sending idle combat units to defend "
-    "what is under attack. Do NOT order those yourself. Your job is the army and the plan: "
+    "two refineries, war factory) and harvesters up to 3, and sending idle combat units to defend "
+    "what is under attack near home. Do NOT order those yourself. Until that core is up, your "
+    "build orders and all training beyond 3 infantry are dropped, so the cash goes to the economy. "
+    "Your job is the army and the plan: "
     "which units and defenses to build, extra production buildings and tech, scouting, and "
     "when and where to attack or retreat."
 )
@@ -90,7 +95,7 @@ class Autopilot:
             want = POWER_PLANT
         elif not any(b in buildings for b in BARRACKS):
             want = next((b for b in BARRACKS if b in available), None)
-        elif REFINERY not in buildings:
+        elif buildings.count(REFINERY) < TARGET_REFINERIES:
             want = REFINERY
         elif WAR_FACTORY not in buildings:
             want = WAR_FACTORY
@@ -148,6 +153,41 @@ def _cell_of(event: dict[str, Any], obs: dict[str, Any]) -> tuple[int, int] | No
         if actor.get("id") == actor_id and isinstance(actor.get("x"), int) and isinstance(actor.get("y"), int):
             return actor["x"], actor["y"]
     return None
+
+
+def economy_ready(state: dict[str, Any]) -> bool:
+    """The core is up: a war factory, TARGET_REFINERIES refineries and
+    TARGET_HARVESTERS harvesters. Until then the cash is the autopilot's."""
+    obs = _dict(state.get("observation"))
+    buildings = _types(_list(obs.get("buildings")))
+    harvesters = sum(1 for t in _types(_list(obs.get("units"))) if t == HARVESTER)
+    return (
+        WAR_FACTORY in buildings
+        and buildings.count(REFINERY) >= TARGET_REFINERIES
+        and harvesters >= TARGET_HARVESTERS
+    )
+
+
+def gate_model_spending(model_orders: list[dict[str, Any]], state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Before the economy is up, the model may not spend: no ``build``, and
+    ``train`` only infantry while it has fewer than EARLY_INFANTRY. Twice the
+    model spent the opening cash on riflemen and the economy never started."""
+    if economy_ready(state):
+        return model_orders
+    obs = _dict(state.get("observation"))
+    infantry = sum(1 for t in _types(_list(obs.get("units"))) if t in INFANTRY)
+    kept = []
+    for order in model_orders:
+        if order.get("cmd") == "build":
+            continue
+        if order.get("cmd") == "train":
+            room = EARLY_INFANTRY - infantry
+            if str(order.get("item", "")).lower() not in INFANTRY or room <= 0:
+                continue
+            order = {**order, "count": max(1, min(int(order.get("count") or 1), room))}
+            infantry += order["count"]
+        kept.append(order)
+    return kept
 
 
 def drop_model_duplicates(model_orders: list[dict[str, Any]], state: dict[str, Any]) -> list[dict[str, Any]]:

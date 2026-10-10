@@ -51,8 +51,11 @@ def test_follows_the_economic_core_in_order():
     assert {"cmd": "build", "item": "powr"} in pilot.orders(_raw(buildings=["fact"], available=available), 0.0)
     assert {"cmd": "build", "item": "tent"} in pilot.orders(_raw(buildings=["fact", "powr"], available=available), 0.0)
     assert {"cmd": "build", "item": "proc"} in pilot.orders(_raw(buildings=["fact", "powr", "tent"], available=available), 0.0)
+    assert {"cmd": "build", "item": "proc"} in pilot.orders(
+        _raw(buildings=["fact", "powr", "tent", "proc"], available=available), 10.0
+    )
     assert {"cmd": "build", "item": "weap"} in pilot.orders(
-        _raw(buildings=["fact", "powr", "tent", "proc"], available=available), 0.0
+        _raw(buildings=["fact", "powr", "tent", "proc", "proc"], available=available), 20.0
     )
 
 
@@ -144,3 +147,19 @@ def test_a_unit_attacked_far_from_home_does_not_pull_the_army():
                events=[{"kind": "under_attack", "tick": 995, "actor": 30}])
 
     assert Autopilot().orders(raw, 0.0) == []
+
+
+def test_model_spending_is_gated_until_the_economy_is_up():
+    from examples.llm.redalert_autopilot import gate_model_spending
+
+    early = _raw(buildings=["fact", "powr", "tent", "proc"], units=[{"id": 1, "type": "e1"}])
+    model = [{"cmd": "build", "item": "pbox"}, {"cmd": "train", "item": "e1", "count": 10},
+             {"cmd": "train", "item": "1tnk", "count": 2}, {"cmd": "attack_move", "units": [1], "to": [9, 9]}]
+
+    assert gate_model_spending(model, early) == [
+        {"cmd": "train", "item": "e1", "count": 2}, {"cmd": "attack_move", "units": [1], "to": [9, 9]}
+    ]
+
+    ready = _raw(buildings=["fact", "powr", "tent", "proc", "proc", "weap"],
+                 units=[{"id": i, "type": "harv"} for i in range(3)])
+    assert gate_model_spending(model, ready) == model
