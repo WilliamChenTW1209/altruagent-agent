@@ -24,6 +24,7 @@ def _raw(*, buildings=(), units=(), production=(), available=(), legal=None, pow
             "production": list(production),
             "available_production": list(available),
             "events": list(events),
+            "base_center": [5, 5],
         },
         "legal_actions": legal or {},
     }
@@ -135,3 +136,11 @@ def test_player_without_autopilot_behaves_as_before():
     player = redalert.RedAlertPlayer(provider, log=lambda line: None)
 
     assert player.choose_action(GameState.from_mcp_state(_raw(legal={"place": ["powr"]})), CONTEXT) is WAIT
+
+
+def test_a_unit_attacked_far_from_home_does_not_pull_the_army():
+    scout = {"id": 30, "type": "e1", "x": 80, "y": 80}
+    raw = _raw(buildings=["fact"], units=[scout], legal={"combat_units": [21, 22]}, tick=1000,
+               events=[{"kind": "under_attack", "tick": 995, "actor": 30}])
+
+    assert Autopilot().orders(raw, 0.0) == []

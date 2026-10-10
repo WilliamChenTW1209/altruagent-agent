@@ -32,6 +32,7 @@ POWER_MARGIN = 40  # build a power plant when spare power falls below this
 REPEAT_SECONDS = 3.0  # don't resend the same autopilot order sooner (verdicts lag)
 UNDER_ATTACK_TICKS = 25 * 6  # react to under_attack events from the last 6 s
 DEFENDERS_PER_ALERT = 50
+HOME_RADIUS = 20  # cells from base_center that count as home for defending
 
 AUTOPILOT_NOTE = (
     "AUTOPILOT: code already handles, on every view and without you: deploying the MCV, "
@@ -114,9 +115,14 @@ class Autopilot:
                   and tick - (e.get("tick") or 0) <= UNDER_ATTACK_TICKS]
         if not alerts:
             return []
-        alert = alerts[-1]
-        cell = _cell_of(alert, obs)
-        return [{"cmd": "attack_move", "units": defenders, "to": list(cell)}] if cell else []
+        # Only what is attacked near home: a scout hit at the enemy base must not
+        # pull the whole army after it.
+        base = obs.get("base_center")
+        for alert in reversed(alerts):
+            cell = _cell_of(alert, obs)
+            if cell and _near(cell, base):
+                return [{"cmd": "attack_move", "units": defenders, "to": list(cell)}]
+        return []
 
     def _fresh(self, order: dict[str, Any], now: float) -> bool:
         key = repr(sorted(order.items()))
@@ -124,6 +130,13 @@ class Autopilot:
             return False
         self._sent[key] = now
         return True
+
+
+def _near(cell: tuple[int, int], base: Any) -> bool:
+    """Within HOME_RADIUS cells of the base centre (no known base: never)."""
+    if not (isinstance(base, (list, tuple)) and len(base) == 2):
+        return False
+    return max(abs(cell[0] - base[0]), abs(cell[1] - base[1])) <= HOME_RADIUS
 
 
 def _cell_of(event: dict[str, Any], obs: dict[str, Any]) -> tuple[int, int] | None:
