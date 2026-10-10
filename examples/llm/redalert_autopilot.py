@@ -31,6 +31,13 @@ TARGET_HARVESTERS = 3
 TARGET_REFINERIES = 2  # each comes with a free harvester, and needs no war factory
 EARLY_INFANTRY = 3  # what the model may train before the economy is up
 INFANTRY = ("e1", "e2", "e3", "e4", "e6", "dog", "medi", "spy", "thf")
+TANKS = ("1tnk", "2tnk", "3tnk", "4tnk", "apc", "ftrk", "jeep", "arty", "v2rl", "ttnk", "ctnk", "stnk", "mgg", "mrj")
+ANTI_INFANTRY = ("e1", "e2", "e4", "dog")  # what beats rocket infantry
+ROCKETS = ("e3",)
+ONE_IS_ENOUGH = ("fix", "dome", "atek", "stek", "gap", "iron", "pdox", "mslo")
+ENEMY_MEMORY_SECONDS = 60.0  # enemies seen this recently still count toward their army
+COUNTER_AT = 3  # react to an enemy type once we have seen this many
+COUNTER_BATCH = 5
 POWER_MARGIN = 40  # build a power plant when spare power falls below this
 REPEAT_SECONDS = 3.0  # don't resend the same autopilot order sooner (verdicts lag)
 UNDER_ATTACK_TICKS = 25 * 6  # react to under_attack events from the last 6 s
@@ -43,7 +50,9 @@ AUTOPILOT_NOTE = (
     "two refineries, war factory) and harvesters up to 3, and sending idle combat units to defend "
     "what is under attack near home. Do NOT order those yourself. Until that core is up, your "
     "build orders and all training beyond 3 infantry are dropped, so the cash goes to the economy. "
-    "Once 2tnk can be built, any 1tnk you order is trained as 2tnk. "
+    "Once 2tnk can be built, any 1tnk you order is trained as 2tnk. A building already queued "
+    "is never queued again. Code also trains anti-infantry when it sees many enemy rocket "
+    "soldiers, and rocket soldiers (e3) when it sees many enemy tanks. "
     "Your job is the army and the plan: "
     "which units and defenses to build, extra production buildings and tech, scouting, and "
     "when and where to attack or retreat."
@@ -67,6 +76,7 @@ class Autopilot:
 
     def __init__(self) -> None:
         self._sent: dict[str, float] = {}  # order key -> when last sent
+        self._enemies: dict[int, tuple[str, float]] = {}  # enemy id -> (type, last seen)
 
     def orders(self, state: dict[str, Any], now: float) -> list[dict[str, Any]]:
         obs = _dict(state.get("observation"))
@@ -109,7 +119,30 @@ class Autopilot:
             out.append({"cmd": "train", "item": HARVESTER, "count": 1})
 
         out.extend(self._defend(obs, legal))
+        out.extend(self._counter(state, obs, available, queued, now))
         return [o for o in out if self._fresh(o, now)]
+
+    def _counter(self, state: dict[str, Any], obs: dict[str, Any], available: set[str], queued: set[str],
+                 now: float) -> list[dict[str, Any]]:
+        """Answer the enemy's army with what beats it: many rocket soldiers ->
+        anti-infantry; many tanks -> rocket soldiers. The model, told so in the
+        strategy, kept building tanks into rocket soldiers anyway."""
+        for e in _list(obs.get("visible_enemies")):
+            if not e.get("wreck") and isinstance(e.get("id"), int):
+                self._enemies[e["id"]] = (str(e.get("type", "")).lower(), now)
+        recent = [t for t, seen in self._enemies.values() if now - seen <= ENEMY_MEMORY_SECONDS]
+        if not economy_ready(state):
+            return []
+        ours = _types(_list(obs.get("units")))
+        enemy_rockets = sum(1 for t in recent if t in ROCKETS)
+        enemy_tanks = sum(1 for t in recent if t in TANKS)
+        out = []
+        anti = next((i for i in ANTI_INFANTRY if i in available), None)
+        if anti and enemy_rockets >= COUNTER_AT and sum(1 for t in ours if t in ANTI_INFANTRY) < enemy_rockets                 and anti not in queued:
+            out.append({"cmd": "train", "item": anti, "count": COUNTER_BATCH})
+        if "e3" in available and enemy_tanks >= COUNTER_AT and sum(1 for t in ours if t in ROCKETS) < enemy_tanks                 and "e3" not in queued:
+            out.append({"cmd": "train", "item": "e3", "count": COUNTER_BATCH})
+        return out
 
     def _defend(self, obs: dict[str, Any], legal: dict[str, Any]) -> list[dict[str, Any]]:
         """Idle combat units to the newest thing of ours under attack."""
@@ -219,13 +252,20 @@ def drop_model_duplicates(model_orders: list[dict[str, Any]], state: dict[str, A
     buildings and harvesters, when those are already handled)."""
     obs = _dict(state.get("observation"))
     queued = {str(p.get("item", "")).lower() for p in _list(obs.get("production"))}
+    built = set(_types(_list(obs.get("buildings"))))
     core = {POWER_PLANT, REFINERY, WAR_FACTORY, HARVESTER, *BARRACKS}
-    kept = []
+    kept, building = [], set()
     for order in model_orders:
         cmd, item = order.get("cmd"), str(order.get("item", "")).lower()
         if cmd in ("deploy", "place"):
             continue
         if cmd in ("build", "train") and item in core and item in queued:
             continue
+        # A building already queued (or one you only ever need, already built)
+        # is not queued again: twice a second service depot cost 1200.
+        if cmd == "build" and (item in queued or item in building or (item in ONE_IS_ENOUGH and item in built)):
+            continue
+        if cmd == "build":
+            building.add(item)
         kept.append(order)
     return kept

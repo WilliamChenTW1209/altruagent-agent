@@ -198,3 +198,35 @@ def test_status_line_shows_ore_and_the_enemy_army():
     line = redalert.status_line(raw)
 
     assert "cash 3000+ore 450" in line and "(3tnkx2 e3x1)" in line
+
+
+READY = ["fact", "powr", "tent", "proc", "proc", "weap"]
+HARVESTERS = [{"id": 100 + i, "type": "harv"} for i in range(3)]
+
+
+def test_many_enemy_rockets_are_answered_with_rifles_and_many_tanks_with_rockets():
+    rockets = _raw(buildings=READY, units=HARVESTERS, available=["e1", "e3"])
+    rockets["observation"]["visible_enemies"] = [{"id": i, "type": "e3"} for i in range(4)]
+    tanks = _raw(buildings=READY, units=HARVESTERS, available=["e1", "e3"])
+    tanks["observation"]["visible_enemies"] = [{"id": i, "type": "3tnk"} for i in range(4)]
+
+    assert {"cmd": "train", "item": "e1", "count": 5} in Autopilot().orders(rockets, 0.0)
+    assert {"cmd": "train", "item": "e3", "count": 5} in Autopilot().orders(tanks, 0.0)
+
+
+def test_no_counter_before_the_economy_is_up_or_against_a_few_enemies():
+    early = _raw(buildings=["fact", "powr", "tent"], available=["e1", "e3"])
+    early["observation"]["visible_enemies"] = [{"id": i, "type": "3tnk"} for i in range(5)]
+    few = _raw(buildings=READY, units=HARVESTERS, available=["e1", "e3"])
+    few["observation"]["visible_enemies"] = [{"id": 1, "type": "3tnk"}]
+
+    assert not any(o["cmd"] == "train" and o["item"] == "e3" for o in Autopilot().orders(early, 0.0))
+    assert not any(o["cmd"] == "train" for o in Autopilot().orders(few, 0.0))
+
+
+def test_a_building_already_queued_or_built_once_is_not_queued_again():
+    raw = _raw(buildings=["fact", "fix"], production=[{"item": "pbox"}])
+    model = [{"cmd": "build", "item": "pbox"}, {"cmd": "build", "item": "fix"},
+             {"cmd": "build", "item": "gun"}, {"cmd": "build", "item": "gun"}]
+
+    assert drop_model_duplicates(model, raw) == [{"cmd": "build", "item": "gun"}]
