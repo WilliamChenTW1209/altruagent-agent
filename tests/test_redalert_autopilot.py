@@ -221,7 +221,7 @@ def test_no_counter_before_the_economy_is_up_or_against_a_few_enemies():
     few["observation"]["visible_enemies"] = [{"id": 1, "type": "3tnk"}]
 
     assert not any(o["cmd"] == "train" and o["item"] == "e3" for o in Autopilot().orders(early, 0.0))
-    assert not any(o["cmd"] == "train" for o in Autopilot().orders(few, 0.0))
+    assert not any(o["cmd"] == "train" and o["item"] == "e3" for o in Autopilot().orders(few, 0.0))
 
 
 def test_a_building_already_queued_or_built_once_is_not_queued_again():
@@ -241,3 +241,28 @@ def test_backup_army_only_while_the_model_is_silent():
     assert {"cmd": "train", "item": "e3", "count": 2} in quiet
     assert legal["attack_now"] in quiet
     assert not any(o["cmd"] == "train" for o in Autopilot().orders(raw, 0.0))
+
+
+def test_idle_infantry_are_assigned_to_guard_harvesters_and_kept_from_the_model():
+    pilot = Autopilot()
+    units = HARVESTERS + [{"id": 300 + i, "type": "e1"} for i in range(8)]
+    raw = _raw(buildings=READY, units=units, legal={"combat_units": [300 + i for i in range(8)]})
+
+    guards = [o for o in pilot.orders(raw, 0.0) if o["cmd"] == "guard"]
+
+    assert len(guards) == 6 and {o["target"] for o in guards} == {100, 101, 102}
+    attack = [{"cmd": "attack_move", "units": [300, 301, 302, 303, 304, 305, 306, 307], "to": [9, 9]}]
+    kept = pilot.strip_guards(attack)[0]["units"]
+    assert len(kept) == 2 and not set(kept) & pilot.guards
+
+
+def test_a_defense_is_built_per_refinery_and_placed_beside_it():
+    raw = _raw(buildings=READY, units=HARVESTERS, available=["ftur"])
+    raw["observation"]["buildings"][3].update(x=40, y=20)  # first refinery
+
+    assert {"cmd": "build", "item": "ftur"} in Autopilot().orders(raw, 0.0)
+
+    placing = _raw(buildings=READY, units=HARVESTERS, legal={"place": ["ftur"]})
+    placing["observation"]["buildings"][3].update(x=40, y=20)
+    placing["observation"]["buildings"][4].update(x=60, y=60)
+    assert {"cmd": "place", "item": "ftur", "at": [43, 21]} in Autopilot().orders(placing, 0.0)

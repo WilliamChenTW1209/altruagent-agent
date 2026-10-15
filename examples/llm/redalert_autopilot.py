@@ -38,6 +38,12 @@ ONE_IS_ENOUGH = ("fix", "dome", "atek", "stek", "gap", "iron", "pdox", "mslo")
 ENEMY_MEMORY_SECONDS = 60.0  # enemies seen this recently still count toward their army
 COUNTER_AT = 3  # react to an enemy type once we have seen this many
 COUNTER_BATCH = 5
+# Answers to an opponent who raids harvesters with rocket soldiers.
+GUARDS_PER_HARVESTER = 2
+MAX_GUARDS = 6
+REFINERY_DEFENSES = ("ftur", "pbox", "gun", "tsla")  # anti-infantry first
+STEADY_INFANTRY = 8  # anti-infantry kept on hand once the economy is up
+
 # Backup army, only while the model is silent (API down, out of credit, slow).
 MODEL_SILENT_SECONDS = 30.0
 BACKUP_TANKS = ("4tnk", "3tnk", "2tnk", "1tnk", "ftrk")  # best first
@@ -56,7 +62,9 @@ AUTOPILOT_NOTE = (
     "build orders and all training beyond 3 infantry are dropped, so the cash goes to the economy. "
     "Once 2tnk can be built, any 1tnk you order is trained as 2tnk. A building already queued "
     "is never queued again. Code also trains anti-infantry when it sees many enemy rocket "
-    "soldiers, and rocket soldiers (e3) when it sees many enemy tanks. "
+    "soldiers, and rocket soldiers (e3) when it sees many enemy tanks. Once the economy is up it "
+    "also keeps 8 anti-infantry on hand, builds one anti-infantry defense beside each refinery, "
+    "and keeps 2 infantry guarding each harvester (up to 6); orders you give those guards are dropped. "
     "Your job is the army and the plan: "
     "which units and defenses to build, extra production buildings and tech, scouting, and "
     "when and where to attack or retreat."
@@ -81,6 +89,7 @@ class Autopilot:
     def __init__(self) -> None:
         self._sent: dict[str, float] = {}  # order key -> when last sent
         self._enemies: dict[int, tuple[str, float]] = {}  # enemy id -> (type, last seen)
+        self.guards: set[int] = set()  # our units assigned to guard harvesters
 
     def orders(self, state: dict[str, Any], now: float, *, model_silent: bool = False) -> list[dict[str, Any]]:
         obs = _dict(state.get("observation"))
@@ -95,11 +104,15 @@ class Autopilot:
         if CONSTRUCTION_YARD not in buildings and legal.get("deploy"):
             out.append({"cmd": "deploy", "units": [int(u) for u in legal["deploy"][:1]]})
 
-        # Place every finished building.
+        # Place every finished building (defenses next to a refinery).
         for item in legal.get("place") or []:
             name = item.get("item") if isinstance(item, dict) else item
             if name:
-                out.append({"cmd": "place", "item": str(name).lower()})
+                order: dict[str, Any] = {"cmd": "place", "item": str(name).lower()}
+                spot = _defense_spot(obs) if order["item"] in REFINERY_DEFENSES else None
+                if spot:
+                    order["at"] = list(spot)
+                out.append(order)
 
         # Power first, then the economic core in order, one building at a time.
         eco = _dict(obs.get("economy"))
@@ -124,6 +137,10 @@ class Autopilot:
 
         out.extend(self._defend(obs, legal))
         out.extend(self._counter(state, obs, available, queued, now))
+        if economy_ready(state):
+            out.extend(self._guard_harvesters(obs, legal))
+            out.extend(_refinery_defense(obs, available, queued, building_busy))
+            out.extend(_steady_infantry(obs, available, queued))
         if model_silent:
             out.extend(_backup_army(state, legal, available, queued))
         return [o for o in out if self._fresh(o, now)]
@@ -171,6 +188,35 @@ class Autopilot:
                 return [{"cmd": "attack_move", "units": defenders, "to": list(cell)}]
         return []
 
+    def _guard_harvesters(self, obs: dict[str, Any], legal: dict[str, Any]) -> list[dict[str, Any]]:
+        """Keep a few infantry guarding each harvester, out of the attacks."""
+        units = {u.get("id"): str(u.get("type", "")).lower() for u in _list(obs.get("units")) if not u.get("wreck")}
+        harvesters = [i for i, t in units.items() if t == HARVESTER]
+        idle = {int(u) for u in legal.get("combat_units") or []}
+        self.guards = {g for g in self.guards if g in units and g not in idle}  # dead or idle: reassign
+        if not harvesters:
+            return []
+        want = min(MAX_GUARDS, GUARDS_PER_HARVESTER * len(harvesters)) - len(self.guards)
+        pick = sorted((u for u in idle if units.get(u) in ANTI_INFANTRY), reverse=True)[: max(0, want)]
+        out = []
+        for n, unit in enumerate(pick):
+            self.guards.add(unit)
+            out.append({"cmd": "guard", "units": [unit], "target": harvesters[n % len(harvesters)]})
+        return out
+
+    def strip_guards(self, model_orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The model's unit orders without our harvester guards in them."""
+        out = []
+        for order in model_orders:
+            units = order.get("units")
+            if isinstance(units, list) and self.guards:
+                units = [u for u in units if u not in self.guards]
+                if not units:
+                    continue
+                order = {**order, "units": units}
+            out.append(order)
+        return out
+
     def _fresh(self, order: dict[str, Any], now: float) -> bool:
         key = repr(sorted(order.items()))
         if now - self._sent.get(key, -1e9) < REPEAT_SECONDS:
@@ -199,6 +245,47 @@ def _cell_of(event: dict[str, Any], obs: dict[str, Any]) -> tuple[int, int] | No
         if actor.get("id") == actor_id and isinstance(actor.get("x"), int) and isinstance(actor.get("y"), int):
             return actor["x"], actor["y"]
     return None
+
+
+def _refineries(obs: dict[str, Any]) -> list[dict[str, Any]]:
+    return [b for b in _list(obs.get("buildings")) if str(b.get("type", "")).lower() == REFINERY]
+
+
+def _defenses(obs: dict[str, Any]) -> list[dict[str, Any]]:
+    return [b for b in _list(obs.get("buildings")) if str(b.get("type", "")).lower() in REFINERY_DEFENSES]
+
+
+def _defense_spot(obs: dict[str, Any]) -> tuple[int, int] | None:
+    """Beside the refinery with the fewest defenses within 6 cells."""
+    refineries = [r for r in _refineries(obs) if isinstance(r.get("x"), int) and isinstance(r.get("y"), int)]
+    if not refineries:
+        return None
+    defenses = _defenses(obs)
+
+    def guarded(r: dict[str, Any]) -> int:
+        return sum(1 for d in defenses if abs((d.get("x") or 0) - r["x"]) <= 6 and abs((d.get("y") or 0) - r["y"]) <= 6)
+
+    best = min(refineries, key=guarded)
+    return best["x"] + 3, best["y"] + 1
+
+
+def _refinery_defense(obs: dict[str, Any], available: set[str], queued: set[str], building_busy: bool) -> list[dict[str, Any]]:
+    """One anti-infantry defense per refinery."""
+    if building_busy or len(_defenses(obs)) >= len(_refineries(obs)):
+        return []
+    item = next((d for d in REFINERY_DEFENSES if d in available), None)
+    if not item or any(q in REFINERY_DEFENSES for q in queued):
+        return []
+    return [{"cmd": "build", "item": item}]
+
+
+def _steady_infantry(obs: dict[str, Any], available: set[str], queued: set[str]) -> list[dict[str, Any]]:
+    """Keep STEADY_INFANTRY anti-infantry around without waiting to see rockets."""
+    anti = next((i for i in ANTI_INFANTRY if i in available), None)
+    have = sum(1 for t in _types(_list(obs.get("units"))) if t in ANTI_INFANTRY)
+    if not anti or have >= STEADY_INFANTRY or any(q in ANTI_INFANTRY for q in queued):
+        return []
+    return [{"cmd": "train", "item": anti, "count": min(3, STEADY_INFANTRY - have)}]
 
 
 def _backup_army(state: dict[str, Any], legal: dict[str, Any], available: set[str], queued: set[str]) -> list[dict[str, Any]]:
