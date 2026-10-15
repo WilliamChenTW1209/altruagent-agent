@@ -47,6 +47,12 @@ STEADY_INFANTRY = 8  # anti-infantry kept on hand once the economy is up
 # A home guard of rocket soldiers: the opponent's late push was 7 medium tanks
 # into a base defended only by riflemen.
 HOME_ROCKETS = 6
+# Numbers before quality: the opponent floods 8-14 cheap infantry by 6:30, and
+# money spent on a service depot, APCs and anti-air left us with a handful of
+# vehicles. Until INFANTRY_FIRST infantry are out, the model gets no vehicles
+# or tech; transports and anti-air (no enemy air seen) are never worth it.
+INFANTRY_FIRST = 12
+USELESS = ("apc", "ftrk", "jeep", "truk", "lst", "mnly", "mrj")
 # Holding a won game: with this much net kill value ahead and this little time
 # left, nothing goes out any more and the army comes home (the tiebreak wins).
 HOLD_LEAD = 5000
@@ -78,6 +84,8 @@ AUTOPILOT_NOTE = (
     "staging point in front of the base instead, so gather the army there and attack all at once "
     "(a single scout, and raids that target a visible enemy harvester, are allowed). "
     "6 rocket soldiers (e3) stay home guarding the construction yard against tank pushes. "
+    "Numbers first: until 12 infantry exist you may train only infantry (no vehicles, no service "
+    "depot or tech); APCs, anti-air and jeeps are never trained. Mass e1 and e3 early. "
     "When you lead by more than 5000 kill value with under 5 minutes left, code recalls the army "
     "home and drops every order that sends units away: the tiebreak already wins, so defend. "
     "Your job is the army and the plan: "
@@ -160,6 +168,7 @@ class Autopilot:
             out.extend(self._guard_home(obs, legal, available, queued))
             out.extend(self._guard_harvesters(obs, legal))
             out.extend(_refinery_defense(obs, available, queued, building_busy))
+        if REFINERY in buildings and any(b in buildings for b in BARRACKS):
             out.extend(_steady_infantry(obs, available, queued))
         if model_silent and not holding_lead(state):
             out.extend(_backup_army(state, legal, available, queued))
@@ -461,7 +470,7 @@ def gate_model_spending(model_orders: list[dict[str, Any]], state: dict[str, Any
     ``train`` only infantry while it has fewer than EARLY_INFANTRY. Twice the
     model spent the opening cash on riflemen and the economy never started."""
     if economy_ready(state):
-        return model_orders
+        return _numbers_first(model_orders, state)
     obs = _dict(state.get("observation"))
     infantry = sum(1 for t in _types(_list(obs.get("units"))) if t in INFANTRY) + sum(
         1 for p in _list(obs.get("production")) if str(p.get("item", "")).lower() in INFANTRY
@@ -476,6 +485,26 @@ def gate_model_spending(model_orders: list[dict[str, Any]], state: dict[str, Any
                 continue
             order = {**order, "count": max(1, min(int(order.get("count") or 1), room))}
             infantry += order["count"]
+        kept.append(order)
+    return kept
+
+
+def _numbers_first(model_orders: list[dict[str, Any]], state: dict[str, Any]) -> list[dict[str, Any]]:
+    """After the economy is up: no transports or anti-air ever, and no vehicles
+    or tech buildings until INFANTRY_FIRST infantry exist (queued ones count)."""
+    obs = _dict(state.get("observation"))
+    infantry = sum(1 for t in _types(_list(obs.get("units"))) if t in INFANTRY) + sum(
+        1 for p in _list(obs.get("production")) if str(p.get("item", "")).lower() in INFANTRY
+    )
+    kept = []
+    for order in model_orders:
+        cmd, item = order.get("cmd"), str(order.get("item", "")).lower()
+        if cmd == "train" and item in USELESS:
+            continue
+        if infantry < INFANTRY_FIRST and (
+            (cmd == "train" and item not in INFANTRY) or (cmd == "build" and item in ONE_IS_ENOUGH)
+        ):
+            continue
         kept.append(order)
     return kept
 

@@ -161,7 +161,7 @@ def test_model_spending_is_gated_until_the_economy_is_up():
     ]
 
     ready = _raw(buildings=["fact", "powr", "tent", "proc", "proc", "weap"],
-                 units=[{"id": i, "type": "harv"} for i in range(3)])
+                 units=[{"id": i, "type": "harv"} for i in range(3)] + [{"id": 50 + i, "type": "e1"} for i in range(12)])
     assert gate_model_spending(model, ready) == model
 
 
@@ -333,3 +333,21 @@ def test_holding_a_won_game_recalls_the_army_and_drops_attacks():
 
     raw["time"] = {"remaining_seconds": 900}
     assert hold_lead([attack], raw) == [attack]
+
+
+def test_numbers_first_and_no_transports_or_anti_air():
+    from examples.llm.redalert_autopilot import gate_model_spending
+
+    few = _raw(buildings=READY, units=HARVESTERS + [{"id": 60, "type": "e1"}])
+    many = _raw(buildings=READY, units=HARVESTERS + [{"id": 60 + i, "type": "e1"} for i in range(12)])
+    model = [{"cmd": "train", "item": "3tnk"}, {"cmd": "train", "item": "apc", "count": 3},
+             {"cmd": "build", "item": "fix"}, {"cmd": "train", "item": "e3", "count": 3}]
+
+    assert gate_model_spending(model, few) == [{"cmd": "train", "item": "e3", "count": 3}]
+    assert gate_model_spending(model, many) == [model[0], model[2], model[3]]
+
+
+def test_steady_infantry_starts_with_the_first_refinery():
+    raw = _raw(buildings=["fact", "powr", "barr", "proc"], available=["e1"])
+
+    assert {"cmd": "train", "item": "e1", "count": 3} in Autopilot().orders(raw, 0.0)
