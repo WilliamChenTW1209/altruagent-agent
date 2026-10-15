@@ -249,12 +249,12 @@ def _cell_of(event: dict[str, Any], obs: dict[str, Any]) -> tuple[int, int] | No
 
 
 def _free_cash_for_core(obs: dict[str, Any]) -> list[dict[str, Any]]:
-    """A core building (power, refinery, war factory) stuck in the queue with no
+    """A core item (power, refinery, war factory, harvester) stuck in the queue with no
     money: cancel one queued tank so the cash goes to the economy first. A lost
     refinery once waited 90 s behind three queued tanks."""
     production = _list(obs.get("production"))
     stuck = any(
-        str(p.get("item", "")).lower() in (POWER_PLANT, REFINERY, WAR_FACTORY) and not p.get("ready")
+        str(p.get("item", "")).lower() in (POWER_PLANT, REFINERY, WAR_FACTORY, HARVESTER) and not p.get("ready")
         for p in production
     )
     eco = _dict(obs.get("economy"))

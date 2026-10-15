@@ -277,3 +277,11 @@ def test_a_queued_tank_is_cancelled_when_a_core_building_has_no_money():
 
     assert {"cmd": "cancel", "item": "2tnk"} in Autopilot().orders(stuck, 0.0)
     assert not any(o["cmd"] == "cancel" for o in Autopilot().orders(funded, 0.0))
+
+
+def test_a_queued_tank_is_cancelled_for_a_starved_harvester_too():
+    raw = _raw(buildings=["fact", "powr", "tent", "proc", "weap"],
+               production=[{"queue": "Vehicle", "item": "2tnk"}, {"queue": "Vehicle", "item": "harv", "ready": False}])
+    raw["observation"]["economy"]["cash"] = 0
+
+    assert {"cmd": "cancel", "item": "2tnk"} in Autopilot().orders(raw, 0.0)
