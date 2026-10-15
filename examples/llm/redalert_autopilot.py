@@ -44,6 +44,15 @@ MAX_GUARDS = 6
 REFINERY_DEFENSES = ("ftur", "pbox", "gun", "tsla")  # anti-infantry first
 STEADY_INFANTRY = 8  # anti-infantry kept on hand once the economy is up
 
+# A home guard of rocket soldiers: the opponent's late push was 7 medium tanks
+# into a base defended only by riflemen.
+HOME_ROCKETS = 6
+# Holding a won game: with this much net kill value ahead and this little time
+# left, nothing goes out any more and the army comes home (the tiebreak wins).
+HOLD_LEAD = 5000
+HOLD_SECONDS = 300
+NON_COMBAT = (HARVESTER, MCV, "medi", "e6", "spy", "thf")
+
 # Backup army, only while the model is silent (API down, out of credit, slow).
 MODEL_SILENT_SECONDS = 30.0
 BACKUP_TANKS = ("4tnk", "3tnk", "2tnk", "1tnk", "ftrk")  # best first
@@ -68,6 +77,9 @@ AUTOPILOT_NOTE = (
     "Attacks away from home need at least 8 units in one order: a smaller group is sent to the "
     "staging point in front of the base instead, so gather the army there and attack all at once "
     "(a single scout, and raids that target a visible enemy harvester, are allowed). "
+    "6 rocket soldiers (e3) stay home guarding the construction yard against tank pushes. "
+    "When you lead by more than 5000 kill value with under 5 minutes left, code recalls the army "
+    "home and drops every order that sends units away: the tiebreak already wins, so defend. "
     "Your job is the army and the plan: "
     "which units and defenses to build, extra production buildings and tech, scouting, and "
     "when and where to attack or retreat."
@@ -93,6 +105,7 @@ class Autopilot:
         self._sent: dict[str, float] = {}  # order key -> when last sent
         self._enemies: dict[int, tuple[str, float]] = {}  # enemy id -> (type, last seen)
         self.guards: set[int] = set()  # our units assigned to guard harvesters
+        self.home_guard: set[int] = set()  # rocket soldiers kept at home
 
     def orders(self, state: dict[str, Any], now: float, *, model_silent: bool = False) -> list[dict[str, Any]]:
         obs = _dict(state.get("observation"))
@@ -141,11 +154,14 @@ class Autopilot:
         out.extend(_free_cash_for_core(obs))
         out.extend(self._defend(obs, legal))
         out.extend(self._counter(state, obs, available, queued, now))
+        if holding_lead(state):
+            out.extend(_recall(obs, self.guards | self.home_guard))
         if economy_ready(state):
+            out.extend(self._guard_home(obs, legal, available, queued))
             out.extend(self._guard_harvesters(obs, legal))
             out.extend(_refinery_defense(obs, available, queued, building_busy))
             out.extend(_steady_infantry(obs, available, queued))
-        if model_silent:
+        if model_silent and not holding_lead(state):
             out.extend(_backup_army(state, legal, available, queued))
         return [o for o in out if self._fresh(o, now)]
 
@@ -192,6 +208,26 @@ class Autopilot:
                 return [{"cmd": "attack_move", "units": defenders, "to": list(cell)}]
         return []
 
+    def _guard_home(self, obs: dict[str, Any], legal: dict[str, Any], available: set[str],
+                    queued: set[str]) -> list[dict[str, Any]]:
+        """Keep HOME_ROCKETS rocket soldiers guarding the construction yard."""
+        units = {u.get("id"): str(u.get("type", "")).lower() for u in _list(obs.get("units")) if not u.get("wreck")}
+        idle = {int(u) for u in legal.get("combat_units") or []}
+        self.home_guard = {g for g in self.home_guard if g in units and g not in idle}
+        yard = next((b.get("id") for b in _list(obs.get("buildings"))
+                     if str(b.get("type", "")).lower() == CONSTRUCTION_YARD), None)
+        if yard is None:
+            return []
+        out = []
+        free = sorted(u for u in idle if units.get(u) in ROCKETS and u not in self.guards)
+        for unit in free[: max(0, HOME_ROCKETS - len(self.home_guard))]:
+            self.home_guard.add(unit)
+            out.append({"cmd": "guard", "units": [unit], "target": yard})
+        rockets = sum(1 for t in units.values() if t in ROCKETS)
+        if "e3" in available and rockets < HOME_ROCKETS and "e3" not in queued:
+            out.append({"cmd": "train", "item": "e3", "count": min(3, HOME_ROCKETS - rockets)})
+        return out
+
     def _guard_harvesters(self, obs: dict[str, Any], legal: dict[str, Any]) -> list[dict[str, Any]]:
         """Keep a few infantry guarding each harvester, out of the attacks."""
         units = {u.get("id"): str(u.get("type", "")).lower() for u in _list(obs.get("units")) if not u.get("wreck")}
@@ -209,12 +245,13 @@ class Autopilot:
         return out
 
     def strip_guards(self, model_orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """The model's unit orders without our harvester guards in them."""
+        """The model's unit orders without our harvester and home guards in them."""
+        kept_home = self.guards | self.home_guard
         out = []
         for order in model_orders:
             units = order.get("units")
-            if isinstance(units, list) and self.guards:
-                units = [u for u in units if u not in self.guards]
+            if isinstance(units, list) and kept_home:
+                units = [u for u in units if u not in kept_home]
                 if not units:
                     continue
                 order = {**order, "units": units}
@@ -307,6 +344,45 @@ def _free_cash_for_core(obs: dict[str, Any]) -> list[dict[str, Any]]:
     broke = (eco.get("cash") or 0) + (eco.get("ore") or 0) < 100
     tank = next((str(p.get("item")).lower() for p in production if str(p.get("item", "")).lower() in TANKS), None)
     return [{"cmd": "cancel", "item": tank}] if stuck and broke and tank else []
+
+
+def holding_lead(state: dict[str, Any]) -> bool:
+    """Far enough ahead on the tiebreak, close enough to the end, to stop risking it."""
+    mil = _dict(_dict(state.get("observation")).get("military"))
+    lead = (mil.get("kills_cost") or 0) - (mil.get("deaths_cost") or 0)
+    left = _dict(state.get("time")).get("remaining_seconds")
+    return isinstance(left, (int, float)) and left < HOLD_SECONDS and lead > HOLD_LEAD
+
+
+def _recall(obs: dict[str, Any], skip: set[int]) -> list[dict[str, Any]]:
+    """Every combat unit away from home, back to the base centre."""
+    base = obs.get("base_center")
+    if not (isinstance(base, (list, tuple)) and len(base) == 2):
+        return []
+    away = [
+        u["id"] for u in _list(obs.get("units"))
+        if isinstance(u.get("id"), int) and u["id"] not in skip and not u.get("wreck")
+        and str(u.get("type", "")).lower() not in NON_COMBAT
+        and isinstance(u.get("x"), int) and isinstance(u.get("y"), int) and not _near((u["x"], u["y"]), base)
+    ]
+    return [{"cmd": "move", "units": away[:50], "to": [int(base[0]), int(base[1])]}] if away else []
+
+
+def hold_lead(model_orders: list[dict[str, Any]], state: dict[str, Any]) -> list[dict[str, Any]]:
+    """While holding a won game, the model's orders that send units away from
+    home are dropped: the 18,000 lead was lost attacking with 4 minutes left."""
+    if not holding_lead(state):
+        return model_orders
+    base = _dict(state.get("observation")).get("base_center")
+    out = []
+    for order in model_orders:
+        to = order.get("to")
+        away = order.get("cmd") in ("move", "attack_move", "attack") and not (
+            isinstance(to, (list, tuple)) and len(to) == 2 and _near(tuple(to), base)
+        )
+        if not away:
+            out.append(order)
+    return out
 
 
 def _refineries(obs: dict[str, Any]) -> list[dict[str, Any]]:

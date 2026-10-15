@@ -221,7 +221,7 @@ def test_no_counter_before_the_economy_is_up_or_against_a_few_enemies():
     few["observation"]["visible_enemies"] = [{"id": 1, "type": "3tnk"}]
 
     assert not any(o["cmd"] == "train" and o["item"] == "e3" for o in Autopilot().orders(early, 0.0))
-    assert not any(o["cmd"] == "train" and o["item"] == "e3" for o in Autopilot().orders(few, 0.0))
+    assert {"cmd": "train", "item": "e3", "count": 5} not in Autopilot().orders(few, 0.0)  # no counter batch
 
 
 def test_a_building_already_queued_or_built_once_is_not_queued_again():
@@ -240,7 +240,7 @@ def test_backup_army_only_while_the_model_is_silent():
     assert {"cmd": "train", "item": "3tnk", "count": 2} in quiet
     assert {"cmd": "train", "item": "e3", "count": 2} in quiet
     assert legal["attack_now"] in quiet
-    assert not any(o["cmd"] == "train" for o in Autopilot().orders(raw, 0.0))
+    assert not any(o["cmd"] == "train" and o["item"] == "3tnk" for o in Autopilot().orders(raw, 0.0))
 
 
 def test_idle_infantry_are_assigned_to_guard_harvesters_and_kept_from_the_model():
@@ -304,3 +304,32 @@ def test_small_attacks_gather_at_the_staging_point_and_big_ones_go():
         {"cmd": "move", "units": [1, 2, 3], "to": [15, 5]}, big, raid,
         {"cmd": "move", "units": [1, 2], "to": [15, 5]}, scout, home,
     ]
+
+
+def test_rocket_soldiers_are_kept_home_guarding_the_yard_and_from_the_model():
+    pilot = Autopilot()
+    units = HARVESTERS + [{"id": 400 + i, "type": "e3"} for i in range(8)]
+    raw = _raw(buildings=READY, units=units, legal={"combat_units": [400 + i for i in range(8)]})
+
+    home = [o for o in pilot.orders(raw, 0.0) if o["cmd"] == "guard" and o["target"] == 10]  # 10: the yard
+
+    assert len(home) == 6
+    assert pilot.strip_guards([{"cmd": "attack_move", "units": [400 + i for i in range(8)], "to": [9, 9]}]) == [
+        {"cmd": "attack_move", "units": [406, 407], "to": [9, 9]}
+    ]
+
+
+def test_holding_a_won_game_recalls_the_army_and_drops_attacks():
+    from examples.llm.redalert_autopilot import hold_lead
+
+    raw = _raw(buildings=["fact"], units=[{"id": 50, "type": "2tnk", "x": 80, "y": 80}, {"id": 51, "type": "harv", "x": 80, "y": 80}])
+    raw["observation"]["military"] = {"kills_cost": 20000, "deaths_cost": 5000}
+    raw["time"] = {"remaining_seconds": 240}
+    attack = {"cmd": "attack_move", "units": [50], "to": [80, 80]}
+    defend = {"cmd": "attack_move", "units": [50], "to": [6, 6]}
+
+    assert {"cmd": "move", "units": [50], "to": [5, 5]} in Autopilot().orders(raw, 0.0)
+    assert hold_lead([attack, defend, {"cmd": "train", "item": "e3"}], raw) == [defend, {"cmd": "train", "item": "e3"}]
+
+    raw["time"] = {"remaining_seconds": 900}
+    assert hold_lead([attack], raw) == [attack]

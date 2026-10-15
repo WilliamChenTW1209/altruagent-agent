@@ -46,7 +46,7 @@ from altruagent import WAIT, DecisionContext, GameState, WithReasoning
 
 from .base import object_schema
 from .providers import LLMProvider, ProviderError
-from .redalert_autopilot import AUTOPILOT_NOTE, MODEL_SILENT_SECONDS, Autopilot, drop_model_duplicates, gate_model_spending, group_attacks, upgrade_tanks
+from .redalert_autopilot import AUTOPILOT_NOTE, MODEL_SILENT_SECONDS, Autopilot, drop_model_duplicates, gate_model_spending, group_attacks, hold_lead, upgrade_tanks
 
 # Your own strategy notes, re-read on every decision so edits apply mid-match.
 STRATEGY_FILE = Path(__file__).resolve().parents[2] / "strategy" / "red_alert.md"
@@ -840,7 +840,7 @@ class RedAlertPlayer:
         model_orders, summary = [], None
         if isinstance(decision, WithReasoning):
             model_orders = upgrade_tanks(gate_model_spending(drop_model_duplicates(decision.action["orders"], raw), raw), raw)
-            model_orders = group_attacks(self._autopilot.strip_guards(model_orders), raw)
+            model_orders = hold_lead(group_attacks(self._autopilot.strip_guards(model_orders), raw), raw)
             summary = decision.reasoning_summary
         orders = (auto + model_orders)[: _limits(raw)["max_orders_per_batch"]]
         if auto:
