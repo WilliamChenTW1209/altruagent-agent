@@ -65,6 +65,9 @@ AUTOPILOT_NOTE = (
     "soldiers, and rocket soldiers (e3) when it sees many enemy tanks. Once the economy is up it "
     "also keeps 8 anti-infantry on hand, builds one anti-infantry defense beside each refinery, "
     "and keeps 2 infantry guarding each harvester (up to 6); orders you give those guards are dropped. "
+    "Attacks away from home need at least 8 units in one order: a smaller group is sent to the "
+    "staging point in front of the base instead, so gather the army there and attack all at once "
+    "(a single scout, and raids that target a visible enemy harvester, are allowed). "
     "Your job is the army and the plan: "
     "which units and defenses to build, extra production buildings and tech, scouting, and "
     "when and where to attack or retreat."
@@ -224,6 +227,49 @@ class Autopilot:
             return False
         self._sent[key] = now
         return True
+
+
+MIN_ATTACK_GROUP = 8  # units that must go out together; fewer wait at the staging point
+STAGING_DISTANCE = 10  # cells from the base centre toward the enemy
+
+
+def _staging(obs: dict[str, Any], legal: dict[str, Any]) -> list[int] | None:
+    base, enemy = obs.get("base_center"), legal.get("enemy_base")
+    if not (isinstance(base, (list, tuple)) and isinstance(enemy, (list, tuple))):
+        return None
+    dx, dy = enemy[0] - base[0], enemy[1] - base[1]
+    far = max(abs(dx), abs(dy)) or 1
+    step = min(1.0, STAGING_DISTANCE / far)
+    return [int(base[0] + dx * step), int(base[1] + dy * step)]
+
+
+def group_attacks(model_orders: list[dict[str, Any]], state: dict[str, Any]) -> list[dict[str, Any]]:
+    """No trickling into the enemy: an order sending fewer than
+    MIN_ATTACK_GROUP units away from home becomes a move to the staging point,
+    so the army gathers and goes in together. Kept as they are: a single
+    scout's move, raids on a visible enemy harvester, and anything near home."""
+    obs, legal = _dict(state.get("observation")), _dict(state.get("legal_actions"))
+    base, staging = obs.get("base_center"), _staging(obs, legal)
+    enemies = {e.get("id"): e for e in _list(obs.get("visible_enemies"))}
+    out = []
+    for order in model_orders:
+        cmd, units = order.get("cmd"), order.get("units") or []
+        if cmd not in ("move", "attack_move", "attack") or not staging or len(units) >= MIN_ATTACK_GROUP:
+            out.append(order)
+            continue
+        target = enemies.get(order.get("target"))
+        if target and str(target.get("type", "")).lower() == HARVESTER:
+            out.append(order)  # a raid on their economy
+            continue
+        if cmd == "move" and len(units) == 1:
+            out.append(order)  # a scout
+            continue
+        to = order.get("to") or ([target.get("x"), target.get("y")] if target else None)
+        if isinstance(to, (list, tuple)) and len(to) == 2 and all(isinstance(c, int) for c in to) and _near(tuple(to), base):
+            out.append(order)  # defending at home
+            continue
+        out.append({"cmd": "move", "units": units, "to": staging})
+    return out
 
 
 def _near(cell: tuple[int, int], base: Any) -> bool:

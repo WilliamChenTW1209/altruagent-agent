@@ -285,3 +285,22 @@ def test_a_queued_tank_is_cancelled_for_a_starved_harvester_too():
     raw["observation"]["economy"]["cash"] = 0
 
     assert {"cmd": "cancel", "item": "2tnk"} in Autopilot().orders(raw, 0.0)
+
+
+def test_small_attacks_gather_at_the_staging_point_and_big_ones_go():
+    from examples.llm.redalert_autopilot import group_attacks
+
+    raw = _raw(legal={"enemy_base": [85, 5]})  # base_center is [5, 5]
+    raw["observation"]["visible_enemies"] = [{"id": 900, "type": "harv", "x": 80, "y": 10},
+                                             {"id": 901, "type": "2tnk", "x": 80, "y": 10}]
+    small = {"cmd": "attack_move", "units": [1, 2, 3], "to": [80, 10]}
+    big = {"cmd": "attack_move", "units": list(range(1, 9)), "to": [80, 10]}
+    raid = {"cmd": "attack", "units": [1, 2], "target": 900}
+    poke = {"cmd": "attack", "units": [1, 2], "target": 901}
+    scout = {"cmd": "move", "units": [7], "to": [80, 10]}
+    home = {"cmd": "attack_move", "units": [4], "to": [8, 8]}
+
+    assert group_attacks([small, big, raid, poke, scout, home], raw) == [
+        {"cmd": "move", "units": [1, 2, 3], "to": [15, 5]}, big, raid,
+        {"cmd": "move", "units": [1, 2], "to": [15, 5]}, scout, home,
+    ]
