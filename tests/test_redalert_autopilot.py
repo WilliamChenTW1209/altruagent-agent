@@ -266,3 +266,14 @@ def test_a_defense_is_built_per_refinery_and_placed_beside_it():
     placing["observation"]["buildings"][3].update(x=40, y=20)
     placing["observation"]["buildings"][4].update(x=60, y=60)
     assert {"cmd": "place", "item": "ftur", "at": [43, 21]} in Autopilot().orders(placing, 0.0)
+
+
+def test_a_queued_tank_is_cancelled_when_a_core_building_has_no_money():
+    stuck = _raw(buildings=["fact", "powr", "tent", "proc", "weap"],
+                 production=[{"queue": "Building", "item": "proc", "ready": False}, {"queue": "Vehicle", "item": "2tnk"}])
+    stuck["observation"]["economy"]["cash"] = 0
+    funded = _raw(buildings=["fact", "powr", "tent", "proc", "weap"],
+                  production=[{"queue": "Building", "item": "proc", "ready": False}, {"queue": "Vehicle", "item": "2tnk"}])
+
+    assert {"cmd": "cancel", "item": "2tnk"} in Autopilot().orders(stuck, 0.0)
+    assert not any(o["cmd"] == "cancel" for o in Autopilot().orders(funded, 0.0))

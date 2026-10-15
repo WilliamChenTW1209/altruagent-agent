@@ -135,6 +135,7 @@ class Autopilot:
         if REFINERY in buildings and harvesters < TARGET_HARVESTERS and HARVESTER in available and HARVESTER not in queued:
             out.append({"cmd": "train", "item": HARVESTER, "count": 1})
 
+        out.extend(_free_cash_for_core(obs))
         out.extend(self._defend(obs, legal))
         out.extend(self._counter(state, obs, available, queued, now))
         if economy_ready(state):
@@ -245,6 +246,21 @@ def _cell_of(event: dict[str, Any], obs: dict[str, Any]) -> tuple[int, int] | No
         if actor.get("id") == actor_id and isinstance(actor.get("x"), int) and isinstance(actor.get("y"), int):
             return actor["x"], actor["y"]
     return None
+
+
+def _free_cash_for_core(obs: dict[str, Any]) -> list[dict[str, Any]]:
+    """A core building (power, refinery, war factory) stuck in the queue with no
+    money: cancel one queued tank so the cash goes to the economy first. A lost
+    refinery once waited 90 s behind three queued tanks."""
+    production = _list(obs.get("production"))
+    stuck = any(
+        str(p.get("item", "")).lower() in (POWER_PLANT, REFINERY, WAR_FACTORY) and not p.get("ready")
+        for p in production
+    )
+    eco = _dict(obs.get("economy"))
+    broke = (eco.get("cash") or 0) + (eco.get("ore") or 0) < 100
+    tank = next((str(p.get("item")).lower() for p in production if str(p.get("item", "")).lower() in TANKS), None)
+    return [{"cmd": "cancel", "item": tank}] if stuck and broke and tank else []
 
 
 def _refineries(obs: dict[str, Any]) -> list[dict[str, Any]]:
