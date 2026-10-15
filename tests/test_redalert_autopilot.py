@@ -351,3 +351,19 @@ def test_steady_infantry_starts_with_the_first_refinery():
     raw = _raw(buildings=["fact", "powr", "barr", "proc"], available=["e1"])
 
     assert {"cmd": "train", "item": "e1", "count": 3} in Autopilot().orders(raw, 0.0)
+
+
+def test_rockets_become_riflemen_against_an_infantry_enemy():
+    pilot = Autopilot()
+    infantry = _raw(available=["e1", "e3"])
+    infantry["observation"]["visible_enemies"] = [{"id": i, "type": "e3"} for i in range(6)]
+    pilot.orders(infantry, 0.0)  # sees them
+
+    order = [{"cmd": "train", "item": "e3", "count": 3}]
+    assert pilot.fit_to_enemy(order, infantry) == [{"cmd": "train", "item": "e1", "count": 3}]
+
+    tanky = Autopilot()
+    tanks = _raw(available=["e1", "e3"])
+    tanks["observation"]["visible_enemies"] = [{"id": i, "type": "2tnk"} for i in range(4)]
+    tanky.orders(tanks, 0.0)
+    assert tanky.fit_to_enemy(order, tanks) == order

@@ -84,6 +84,7 @@ AUTOPILOT_NOTE = (
     "staging point in front of the base instead, so gather the army there and attack all at once "
     "(a single scout, and raids that target a visible enemy harvester, are allowed). "
     "6 rocket soldiers (e3) stay home guarding the construction yard against tank pushes. "
+    "Against a mostly-infantry enemy, rocket soldiers you order are trained as riflemen (e1). "
     "Numbers first: until 12 infantry exist you may train only infantry (no vehicles, no service "
     "depot or tech); APCs, anti-air and jeeps are never trained. Mass e1 and e3 early. "
     "When you lead by more than 5000 kill value with under 5 minutes left, code recalls the army "
@@ -252,6 +253,20 @@ class Autopilot:
             self.guards.add(unit)
             out.append({"cmd": "guard", "units": [unit], "target": harvesters[n % len(harvesters)]})
         return out
+
+    def fit_to_enemy(self, model_orders: list[dict[str, Any]], state: dict[str, Any]) -> list[dict[str, Any]]:
+        """Against a mostly-infantry enemy (every enemy seen this match), the
+        model's rocket soldiers become riflemen: rockets are made for tanks,
+        and the model kept answering an infantry flood with them."""
+        seen = [t for t, _ in self._enemies.values()]
+        infantry = sum(1 for t in seen if t in INFANTRY)
+        tanks = sum(1 for t in seen if t in TANKS)
+        available = {str(i).lower() for i in _dict(state.get("observation")).get("available_production") or []}
+        rifle = next((i for i in ANTI_INFANTRY if i in available), None)
+        if not rifle or infantry < 4 or infantry < 2 * tanks:
+            return model_orders
+        return [{**o, "item": rifle} if o.get("cmd") == "train" and str(o.get("item", "")).lower() in ROCKETS else o
+                for o in model_orders]
 
     def strip_guards(self, model_orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """The model's unit orders without our harvester and home guards in them."""
