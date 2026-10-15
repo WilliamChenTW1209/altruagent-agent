@@ -165,6 +165,9 @@ class Autopilot:
         out.extend(self._counter(state, obs, available, queued, now))
         if holding_lead(state):
             out.extend(_recall(obs, self.guards | self.home_guard))
+            # Keep spending while holding: more defenders, and assets_value is the
+            # tiebreak's second key. (Training only; nothing is sent out.)
+            out.extend(o for o in _backup_army(state, legal, available, queued) if o.get("cmd") == "train")
         if economy_ready(state):
             out.extend(self._guard_home(obs, legal, available, queued))
             out.extend(self._guard_harvesters(obs, legal))

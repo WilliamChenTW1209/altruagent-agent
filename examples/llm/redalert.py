@@ -275,7 +275,8 @@ def status_line(state: dict[str, Any]) -> str:
     enemy_buildings = [e for e in _list(obs, "visible_enemy_buildings") if not e.get("wreck")]
     tick = _obs_tick(state) or 0
     left = _dict(state.get("time")).get("remaining_seconds")
-    clock = f"{tick // 25 // 60}:{tick // 25 % 60:02d}" + (f" (left {int(left) // 60}:{int(left) % 60:02d})" if _is_int(left) else "")
+    has_left = isinstance(left, (int, float)) and not isinstance(left, bool)
+    clock = f"{tick // 25 // 60}:{tick // 25 % 60:02d}" + (f" (left {int(left) // 60}:{int(left) % 60:02d})" if has_left else "")
     kd = (mil.get("kills_cost") or 0) - (mil.get("deaths_cost") or 0)
     queue = ",".join(str(p.get("item")) for p in _list(obs, "production")[:4]) or "-"
     counts: dict[str, int] = {}

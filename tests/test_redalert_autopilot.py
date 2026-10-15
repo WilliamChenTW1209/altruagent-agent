@@ -367,3 +367,15 @@ def test_rockets_become_riflemen_against_an_infantry_enemy():
     tanks["observation"]["visible_enemies"] = [{"id": i, "type": "2tnk"} for i in range(4)]
     tanky.orders(tanks, 0.0)
     assert tanky.fit_to_enemy(order, tanks) == order
+
+
+def test_holding_keeps_training_and_status_shows_float_time_left():
+    raw = _raw(buildings=READY, units=HARVESTERS, available=["2tnk", "e3"],
+               legal={"combat_units": list(range(200, 215)), "attack_now": {"cmd": "attack_move", "units": [200], "to": [50, 50]}})
+    raw["observation"]["military"] = {"kills_cost": 20000, "deaths_cost": 5000}
+    raw["time"] = {"remaining_seconds": 240.7}
+
+    orders = Autopilot().orders(raw, 0.0)
+    assert {"cmd": "train", "item": "2tnk", "count": 2} in orders
+    assert raw["legal_actions"]["attack_now"] not in orders
+    assert "(left 4:00)" in redalert.status_line(raw)
