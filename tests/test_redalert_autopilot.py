@@ -230,3 +230,14 @@ def test_a_building_already_queued_or_built_once_is_not_queued_again():
              {"cmd": "build", "item": "gun"}, {"cmd": "build", "item": "gun"}]
 
     assert drop_model_duplicates(model, raw) == [{"cmd": "build", "item": "gun"}]
+
+
+def test_backup_army_only_while_the_model_is_silent():
+    legal = {"combat_units": list(range(200, 212)), "attack_now": {"cmd": "attack_move", "units": [200], "to": [50, 50]}}
+    raw = _raw(buildings=READY, units=HARVESTERS, available=["e3", "1tnk", "3tnk"], legal=legal)
+
+    quiet = Autopilot().orders(raw, 0.0, model_silent=True)
+    assert {"cmd": "train", "item": "3tnk", "count": 2} in quiet
+    assert {"cmd": "train", "item": "e3", "count": 2} in quiet
+    assert legal["attack_now"] in quiet
+    assert not any(o["cmd"] == "train" for o in Autopilot().orders(raw, 0.0))

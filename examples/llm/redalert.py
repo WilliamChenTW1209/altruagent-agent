@@ -46,7 +46,7 @@ from altruagent import WAIT, DecisionContext, GameState, WithReasoning
 
 from .base import object_schema
 from .providers import LLMProvider, ProviderError
-from .redalert_autopilot import AUTOPILOT_NOTE, Autopilot, drop_model_duplicates, gate_model_spending, upgrade_tanks
+from .redalert_autopilot import AUTOPILOT_NOTE, MODEL_SILENT_SECONDS, Autopilot, drop_model_duplicates, gate_model_spending, upgrade_tanks
 
 # Your own strategy notes, re-read on every decision so edits apply mid-match.
 STRATEGY_FILE = Path(__file__).resolve().parents[2] / "strategy" / "red_alert.md"
@@ -780,6 +780,7 @@ class RedAlertPlayer:
         self._autopilot = Autopilot() if autopilot else None
         self._pool = ThreadPoolExecutor(max_workers=1) if background else None
         self._future: Future | None = None
+        self._model_heard = clock()  # when the model last answered with orders
         self._log = log
         self.max_calls = max_calls
         self._clock = clock
@@ -832,7 +833,10 @@ class RedAlertPlayer:
         decision = self._background_decision(raw) if self._pool else self._model_decision(raw)
         if self._autopilot is None:
             return decision
-        auto = self._autopilot.orders(raw, self._clock())
+        if isinstance(decision, WithReasoning):
+            self._model_heard = self._clock()
+        silent = self._clock() - self._model_heard > MODEL_SILENT_SECONDS
+        auto = self._autopilot.orders(raw, self._clock(), model_silent=silent)
         model_orders, summary = [], None
         if isinstance(decision, WithReasoning):
             model_orders = upgrade_tanks(gate_model_spending(drop_model_duplicates(decision.action["orders"], raw), raw), raw)

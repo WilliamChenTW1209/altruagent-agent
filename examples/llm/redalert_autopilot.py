@@ -38,6 +38,10 @@ ONE_IS_ENOUGH = ("fix", "dome", "atek", "stek", "gap", "iron", "pdox", "mslo")
 ENEMY_MEMORY_SECONDS = 60.0  # enemies seen this recently still count toward their army
 COUNTER_AT = 3  # react to an enemy type once we have seen this many
 COUNTER_BATCH = 5
+# Backup army, only while the model is silent (API down, out of credit, slow).
+MODEL_SILENT_SECONDS = 30.0
+BACKUP_TANKS = ("4tnk", "3tnk", "2tnk", "1tnk", "ftrk")  # best first
+BACKUP_ATTACK_AT = 12  # idle combat units before the backup sends them in
 POWER_MARGIN = 40  # build a power plant when spare power falls below this
 REPEAT_SECONDS = 3.0  # don't resend the same autopilot order sooner (verdicts lag)
 UNDER_ATTACK_TICKS = 25 * 6  # react to under_attack events from the last 6 s
@@ -78,7 +82,7 @@ class Autopilot:
         self._sent: dict[str, float] = {}  # order key -> when last sent
         self._enemies: dict[int, tuple[str, float]] = {}  # enemy id -> (type, last seen)
 
-    def orders(self, state: dict[str, Any], now: float) -> list[dict[str, Any]]:
+    def orders(self, state: dict[str, Any], now: float, *, model_silent: bool = False) -> list[dict[str, Any]]:
         obs = _dict(state.get("observation"))
         legal = _dict(state.get("legal_actions"))
         available = {str(i).lower() for i in obs.get("available_production") or []}
@@ -120,6 +124,8 @@ class Autopilot:
 
         out.extend(self._defend(obs, legal))
         out.extend(self._counter(state, obs, available, queued, now))
+        if model_silent:
+            out.extend(_backup_army(state, legal, available, queued))
         return [o for o in out if self._fresh(o, now)]
 
     def _counter(self, state: dict[str, Any], obs: dict[str, Any], available: set[str], queued: set[str],
@@ -193,6 +199,23 @@ def _cell_of(event: dict[str, Any], obs: dict[str, Any]) -> tuple[int, int] | No
         if actor.get("id") == actor_id and isinstance(actor.get("x"), int) and isinstance(actor.get("y"), int):
             return actor["x"], actor["y"]
     return None
+
+
+def _backup_army(state: dict[str, Any], legal: dict[str, Any], available: set[str], queued: set[str]) -> list[dict[str, Any]]:
+    """With no model, keep an army coming and use it: the best tank and some
+    rocket soldiers, and an attack once enough units are idle."""
+    if not economy_ready(state):
+        return []
+    out = []
+    tank = next((t for t in BACKUP_TANKS if t in available), None)
+    if tank and tank not in queued:
+        out.append({"cmd": "train", "item": tank, "count": 2})
+    if "e3" in available and "e3" not in queued:
+        out.append({"cmd": "train", "item": "e3", "count": 2})
+    attack = legal.get("attack_now")
+    if isinstance(attack, dict) and len(legal.get("combat_units") or []) >= BACKUP_ATTACK_AT:
+        out.append(attack)
+    return out
 
 
 def economy_ready(state: dict[str, Any]) -> bool:
