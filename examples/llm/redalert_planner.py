@@ -53,7 +53,8 @@ ENEMY_WINDOW_SECONDS = 120.0
 REPLACE_BELOW = 0.85
 # When the best infantry is this much worse than the best vehicle (e.g. against
 # flamethrowers), the barracks stops feeding infantry into it.
-INFANTRY_SKIP_BELOW = 0.8  # a model pick scoring under this fraction of the best is replaced
+INFANTRY_SKIP_BELOW = 0.8
+INFANTRY_RESERVE = 300  # infantry waits until this much beyond its price is spare (tanks first)  # a model pick scoring under this fraction of the best is replaced
 BATCH = {"infantry": 3, "vehicle": 1}
 
 
@@ -119,13 +120,19 @@ class Planner:
             INFANTRY_SKIP_BELOW * self.score(picks["vehicle"], mix, ours)
         ):
             picks["infantry"] = None  # tanks only: infantry would just feed the flamers
+        # Production is paid as it goes, so a tank is queued whenever the factory
+        # is idle, whatever the cash. Infantry only takes money that is spare:
+        # waiting to afford a 1150 tank while 160 grenadiers were always
+        # affordable meant no tank was ever built.
         out = []
-        for kind, queue in (("vehicle", "Vehicle"), ("infantry", "Infantry")):
-            pick = picks[kind]
-            busy = any(str(p.get("queue")) == queue for p in production)
-            if pick and not busy and money >= COST.get(pick, 0):
-                out.append({"cmd": "train", "item": pick, "count": BATCH[kind]})
-                money -= COST.get(pick, 0)
+        vehicle_busy = any(str(p.get("queue")) == "Vehicle" for p in production)
+        if picks["vehicle"] and not vehicle_busy:
+            out.append({"cmd": "train", "item": picks["vehicle"], "count": BATCH["vehicle"]})
+        tanks_wanted = picks["vehicle"] is not None
+        infantry_busy = any(str(p.get("queue")) == "Infantry" for p in production)
+        pick = picks["infantry"]
+        if pick and not infantry_busy and (not tanks_wanted or money >= COST.get(pick, 0) + INFANTRY_RESERVE):
+            out.append({"cmd": "train", "item": pick, "count": BATCH["infantry"]})
         return out
 
     def refine(self, model_orders: list[dict[str, Any]], obs: dict[str, Any], available: set[str],

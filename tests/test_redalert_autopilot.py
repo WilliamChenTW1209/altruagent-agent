@@ -389,7 +389,7 @@ def test_planner_never_builds_anti_air_or_transports_and_needs_money():
 
     raw["observation"]["economy"].update(cash=0, ore=0)
     from examples.llm.redalert_planner import Planner
-    assert Planner().produce(raw["observation"], {"e3"}, 0.0) == []
+    assert Planner().produce(raw["observation"], {"e3", "3tnk"}, 0.0) == [{"cmd": "train", "item": "3tnk", "count": 1}]
 
 
 def test_planner_spreads_the_army_instead_of_one_type():
@@ -479,3 +479,15 @@ def test_flamethrowers_are_answered_with_tanks_and_hunted_by_them():
     raw["observation"]["visible_enemies"] = [{"id": 80, "type": "2tnk", "x": 11, "y": 10},
                                              {"id": 81, "type": "e4", "x": 13, "y": 10}]
     assert {"cmd": "attack", "units": [5], "target": 81} in Autopilot().orders(raw, 0.0)
+
+
+def test_tanks_are_queued_without_saving_up_and_infantry_waits_for_spare_money():
+    from examples.llm.redalert_planner import Planner
+
+    obs = {"economy": {"cash": 0, "ore": 200}, "units": [], "production": []}
+    orders = Planner().produce(obs, {"e2", "3tnk"}, 0.0)
+    assert {"cmd": "train", "item": "3tnk", "count": 1} in orders
+    assert not any(o["item"] == "e2" for o in orders)
+
+    obs["economy"]["ore"] = 2000
+    assert any(o["item"] == "e2" for o in Planner().produce(obs, {"e2", "3tnk"}, 0.0))
