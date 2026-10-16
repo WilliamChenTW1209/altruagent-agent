@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .redalert_planner import Planner
+from .redalert_planner import CATEGORY, Planner
 
 POWER_PLANT = "powr"
 BARRACKS = ("tent", "barr")
@@ -64,6 +64,17 @@ HOLD_SECONDS = 300
 CRUSH_UNITS = 30
 CRUSH_RATIO = 4
 NON_COMBAT = (HARVESTER, MCV, "medi", "e6", "spy", "thf")
+
+# Target selection: each unit shoots what it is built to beat, if it is close.
+ENGAGE_RADIUS = 8  # cells: only enemies this close are picked, nobody is dragged across the map
+MICRO_EVERY_SECONDS = 2.0
+MICRO_MAX_UNITS = 120  # engine-command budget (200 per batch) left for the rest
+PREFERRED_TARGETS = {
+    # our unit -> enemy categories it should shoot, best first
+    **{t: ("infantry", "light") for t in ("e1", "e2", "e4")},
+    "e3": ("tank", "light"),
+    **{t: ("tank", "light", "infantry") for t in ("1tnk", "2tnk", "3tnk", "4tnk", "ttnk")},
+}
 
 # Backup army, only while the model is silent (API down, out of credit, slow).
 MODEL_SILENT_SECONDS = 30.0
@@ -127,6 +138,7 @@ class Autopilot:
         self.guards: set[int] = set()  # our units assigned to guard harvesters
         self.home_guard: set[int] = set()  # rocket soldiers kept at home
         self.planner = Planner()  # picks the units that beat the enemy army we have seen
+        self._next_micro = 0.0
 
     def orders(self, state: dict[str, Any], now: float, *, model_silent: bool = False) -> list[dict[str, Any]]:
         obs = _dict(state.get("observation"))
@@ -193,6 +205,9 @@ class Autopilot:
             out.extend(self.planner.produce(obs, available, now))
         elif REFINERY in buildings and any(b in buildings for b in BARRACKS):
             out.extend(_steady_infantry(obs, available, queued))
+        if now >= self._next_micro:
+            self._next_micro = now + MICRO_EVERY_SECONDS
+            out.extend(self._pick_targets(obs))
         if model_silent and not holding_lead(state):
             out.extend(o for o in _backup_army(state, legal, available, queued) if o.get("cmd") != "train")
         return [o for o in out if self._fresh(o, now)]
@@ -300,6 +315,33 @@ class Autopilot:
         return [{**o, "item": rifle} if o.get("cmd") == "train" and str(o.get("item", "")).lower() in ROCKETS else o
                 for o in model_orders]
 
+    def _pick_targets(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
+        """Each of our fighters near the enemy attacks the closest enemy it
+        counters: riflemen walk past the tanks to the rocket soldiers behind
+        them, rocket soldiers take the tanks. Units with nothing they counter
+        in range keep their current orders."""
+        enemies = [
+            e for e in _list(obs.get("visible_enemies"))
+            if not e.get("wreck") and isinstance(e.get("id"), int) and isinstance(e.get("x"), int)
+            and isinstance(e.get("y"), int) and CATEGORY.get(str(e.get("type", "")).lower())
+        ]
+        if not enemies:
+            return []
+        skip = self.guards | self.home_guard
+        by_target: dict[int, list[int]] = {}
+        used = 0
+        for unit in _list(obs.get("units")):
+            uid, kind = unit.get("id"), str(unit.get("type", "")).lower()
+            prefs = PREFERRED_TARGETS.get(kind)
+            if (not prefs or uid in skip or unit.get("wreck") or not isinstance(uid, int)
+                    or not isinstance(unit.get("x"), int) or not isinstance(unit.get("y"), int)):
+                continue
+            target = _closest_preferred(unit, enemies, prefs)
+            if target is not None and used < MICRO_MAX_UNITS:
+                by_target.setdefault(target, []).append(uid)
+                used += 1
+        return [{"cmd": "attack", "units": units[:50], "target": target} for target, units in by_target.items()]
+
     def strip_guards(self, model_orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """The model's unit orders without our harvester and home guards in them."""
         kept_home = self.guards | self.home_guard
@@ -370,6 +412,19 @@ def _near(cell: tuple[int, int], base: Any) -> bool:
     if not (isinstance(base, (list, tuple)) and len(base) == 2):
         return False
     return max(abs(cell[0] - base[0]), abs(cell[1] - base[1])) <= HOME_RADIUS
+
+
+def _closest_preferred(unit: dict[str, Any], enemies: list[dict[str, Any]], prefs: tuple[str, ...]) -> int | None:
+    """The nearest enemy within ENGAGE_RADIUS of the most preferred category present."""
+    def dist(e: dict[str, Any]) -> int:
+        return max(abs(e["x"] - unit["x"]), abs(e["y"] - unit["y"]))
+
+    near = [e for e in enemies if dist(e) <= ENGAGE_RADIUS]
+    for cat in prefs:
+        options = [e for e in near if CATEGORY.get(str(e.get("type", "")).lower()) == cat]
+        if options:
+            return min(options, key=dist)["id"]
+    return None
 
 
 def _actor_id(event: dict[str, Any]) -> int | None:

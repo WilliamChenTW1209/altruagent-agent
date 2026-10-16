@@ -444,3 +444,25 @@ def test_enemy_mix_is_weighted_by_value_so_tanks_count_for_their_cost():
 
     army = {"units": [{"id": i, "type": "e1"} for i in range(40)] + [{"id": 100 + i, "type": "e3"} for i in range(10)]}
     assert planner.best("infantry", {"e1", "e3"}, army, 0.0) == "e3"
+
+
+def test_units_shoot_what_they_counter_not_what_is_in_front():
+    raw = _raw(units=[{"id": 1, "type": "e1", "x": 10, "y": 10}, {"id": 2, "type": "e1", "x": 11, "y": 10},
+                      {"id": 3, "type": "e3", "x": 10, "y": 11}])
+    raw["observation"]["visible_enemies"] = [
+        {"id": 90, "type": "3tnk", "x": 12, "y": 10},  # in front
+        {"id": 91, "type": "e3", "x": 15, "y": 10},    # hiding behind it
+        {"id": 92, "type": "e1", "x": 40, "y": 40},    # too far to matter
+    ]
+
+    orders = [o for o in Autopilot().orders(raw, 0.0) if o["cmd"] == "attack"]
+
+    assert {"cmd": "attack", "units": [1, 2], "target": 91} in orders  # riflemen go for the rockets
+    assert {"cmd": "attack", "units": [3], "target": 90} in orders     # rockets take the tank
+
+
+def test_units_with_nothing_they_counter_nearby_are_left_alone():
+    raw = _raw(units=[{"id": 3, "type": "e3", "x": 10, "y": 10}])
+    raw["observation"]["visible_enemies"] = [{"id": 91, "type": "e1", "x": 12, "y": 10}]
+
+    assert not any(o["cmd"] == "attack" for o in Autopilot().orders(raw, 0.0))
