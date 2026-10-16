@@ -428,3 +428,14 @@ def test_banked_money_never_buys_anti_air():
     orders = Autopilot().orders(raw, 0.0)
     assert not any(o.get("item") in ("ftrk", "apc") for o in orders)
     assert {"cmd": "train", "item": "e3", "count": 2} in orders
+
+
+def test_service_depot_is_built_once_the_infantry_screen_is_up():
+    few = _raw(buildings=READY, units=HARVESTERS + [{"id": 70, "type": "e1"}], available=["fix"])
+    many = _raw(buildings=READY, units=HARVESTERS + [{"id": 70 + i, "type": "e1"} for i in range(12)], available=["fix"])
+    built = _raw(buildings=READY + ["fix"], units=HARVESTERS + [{"id": 70 + i, "type": "e1"} for i in range(12)],
+                 available=["fix"])
+
+    assert {"cmd": "build", "item": "fix"} not in Autopilot().orders(few, 0.0)
+    assert {"cmd": "build", "item": "fix"} in Autopilot().orders(many, 0.0)
+    assert {"cmd": "build", "item": "fix"} not in Autopilot().orders(built, 0.0)

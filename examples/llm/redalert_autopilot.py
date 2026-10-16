@@ -183,6 +183,7 @@ class Autopilot:
             out.extend(self._guard_home(obs, legal, available, queued))
             out.extend(self._guard_harvesters(obs, legal))
             out.extend(_refinery_defense(obs, available, queued, building_busy))
+            out.extend(_service_depot(obs, buildings, available, queued, building_busy))
         if REFINERY in buildings and any(b in buildings for b in BARRACKS):
             out.extend(_steady_infantry(obs, available, queued))
         eco_now = _dict(obs.get("economy"))
@@ -468,6 +469,21 @@ def _defense_spot(obs: dict[str, Any]) -> tuple[int, int] | None:
 
     best = min(refineries, key=guarded)
     return best["x"] + 3, best["y"] + 1
+
+
+SERVICE_DEPOT = "fix"
+
+
+def _service_depot(obs: dict[str, Any], buildings: list[str], available: set[str], queued: set[str],
+                   building_busy: bool) -> list[dict[str, Any]]:
+    """The service depot unlocks the real tanks (2tnk / 3tnk). Once the infantry
+    screen is up, build it: the model once went 10 minutes without one and
+    could only ever train rocket soldiers."""
+    infantry = sum(1 for t in _types(_list(obs.get("units"))) if t in INFANTRY)
+    if (SERVICE_DEPOT in buildings or SERVICE_DEPOT in queued or SERVICE_DEPOT not in available
+            or building_busy or infantry < INFANTRY_FIRST):
+        return []
+    return [{"cmd": "build", "item": SERVICE_DEPOT}]
 
 
 def _refinery_defense(obs: dict[str, Any], available: set[str], queued: set[str], building_busy: bool) -> list[dict[str, Any]]:
