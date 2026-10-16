@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .redalert_planner import Planner
+
 POWER_PLANT = "powr"
 BARRACKS = ("tent", "barr")
 REFINERY = "proc"
@@ -89,7 +91,9 @@ AUTOPILOT_NOTE = (
     "staging point in front of the base instead, so gather the army there and attack all at once "
     "(a single scout, and raids that target a visible enemy harvester, are allowed). "
     "6 rocket soldiers (e3) stay home guarding the construction yard against tank pushes. "
-    "Against a mostly-infantry enemy, rocket soldiers you order are trained as riflemen (e1). "
+    "Unit choice is planned by code from the enemy army seen in the last 2 minutes: it keeps the "
+    "infantry and vehicle queues busy with what beats that mix, and a unit you order that is far "
+    "worse against it is swapped for the best one. Scout so it knows what they field. "
     "Numbers first: until 12 infantry exist you may train only infantry (no vehicles, no service "
     "depot or tech); APCs, anti-air and jeeps are never trained. Mass e1 and e3 early. "
     "When you lead by more than 5000 kill value with under 5 minutes left, code recalls the army "
@@ -122,6 +126,7 @@ class Autopilot:
         self._enemies: dict[int, tuple[str, float]] = {}  # enemy id -> (type, last seen)
         self.guards: set[int] = set()  # our units assigned to guard harvesters
         self.home_guard: set[int] = set()  # rocket soldiers kept at home
+        self.planner = Planner()  # picks the units that beat the enemy army we have seen
 
     def orders(self, state: dict[str, Any], now: float, *, model_silent: bool = False) -> list[dict[str, Any]]:
         obs = _dict(state.get("observation"))
@@ -169,28 +174,27 @@ class Autopilot:
 
         out.extend(_free_cash_for_core(obs))
         out.extend(self._defend(obs, legal))
-        out.extend(self._counter(state, obs, available, queued, now))
+        self._counter(state, obs, available, queued, now)  # keeps the enemy memory current
+        self.planner.observe(obs, now)
         if finishing(state):
             attack = legal.get("attack_now")
             if isinstance(attack, dict) and len(legal.get("combat_units") or []) >= MIN_ATTACK_GROUP:
                 out.append(attack)  # every idle combat unit, together, at the enemy
         if holding_lead(state):
             out.extend(_recall(obs, self.guards | self.home_guard))
-            # Keep spending while holding: more defenders, and assets_value is the
-            # tiebreak's second key. (Training only; nothing is sent out.)
-            out.extend(o for o in _backup_army(state, legal, available, queued) if o.get("cmd") == "train")
         if economy_ready(state):
             out.extend(self._guard_home(obs, legal, available, queued))
             out.extend(self._guard_harvesters(obs, legal))
             out.extend(_refinery_defense(obs, available, queued, building_busy))
             out.extend(_service_depot(obs, buildings, available, queued, building_busy))
-        if REFINERY in buildings and any(b in buildings for b in BARRACKS):
+        if economy_ready(state):
+            # Keep both production queues busy with what beats the enemy we have seen
+            # (also while holding a lead, and while the model is silent).
+            out.extend(self.planner.produce(obs, available, now))
+        elif REFINERY in buildings and any(b in buildings for b in BARRACKS):
             out.extend(_steady_infantry(obs, available, queued))
-        eco_now = _dict(obs.get("economy"))
-        if economy_ready(state) and (eco_now.get("cash") or 0) + (eco_now.get("ore") or 0) > SPEND_ABOVE:
-            out.extend(o for o in _backup_army(state, legal, available, queued) if o.get("cmd") == "train")
         if model_silent and not holding_lead(state):
-            out.extend(_backup_army(state, legal, available, queued))
+            out.extend(o for o in _backup_army(state, legal, available, queued) if o.get("cmd") != "train")
         return [o for o in out if self._fresh(o, now)]
 
     def _counter(self, state: dict[str, Any], obs: dict[str, Any], available: set[str], queued: set[str],
@@ -273,6 +277,14 @@ class Autopilot:
         return out
 
     def fit_to_enemy(self, model_orders: list[dict[str, Any]], state: dict[str, Any]) -> list[dict[str, Any]]:
+        """The model's unit choices, checked against the planner's: a pick far
+        worse against the enemy army we have seen becomes the best one."""
+        obs = _dict(state.get("observation"))
+        available = {str(i).lower() for i in obs.get("available_production") or []}
+        now = max((t for _, t in self._enemies.values()), default=0.0)
+        return self.planner.refine(model_orders, obs, available, now)
+
+    def _old_fit_to_enemy(self, model_orders: list[dict[str, Any]], state: dict[str, Any]) -> list[dict[str, Any]]:
         """Against a mostly-infantry enemy (every enemy seen this match), the
         model's rocket soldiers become riflemen: rockets are made for tanks,
         and the model kept answering an infantry flood with them."""

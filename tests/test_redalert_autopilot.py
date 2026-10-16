@@ -204,16 +204,6 @@ READY = ["fact", "powr", "tent", "proc", "proc", "weap"]
 HARVESTERS = [{"id": 100 + i, "type": "harv"} for i in range(3)]
 
 
-def test_many_enemy_rockets_are_answered_with_rifles_and_many_tanks_with_rockets():
-    rockets = _raw(buildings=READY, units=HARVESTERS, available=["e1", "e3"])
-    rockets["observation"]["visible_enemies"] = [{"id": i, "type": "e3"} for i in range(4)]
-    tanks = _raw(buildings=READY, units=HARVESTERS, available=["e1", "e3"])
-    tanks["observation"]["visible_enemies"] = [{"id": i, "type": "3tnk"} for i in range(4)]
-
-    assert {"cmd": "train", "item": "e1", "count": 5} in Autopilot().orders(rockets, 0.0)
-    assert {"cmd": "train", "item": "e3", "count": 5} in Autopilot().orders(tanks, 0.0)
-
-
 def test_no_counter_before_the_economy_is_up_or_against_a_few_enemies():
     early = _raw(buildings=["fact", "powr", "tent"], available=["e1", "e3"])
     early["observation"]["visible_enemies"] = [{"id": i, "type": "3tnk"} for i in range(5)]
@@ -230,18 +220,6 @@ def test_a_building_already_queued_or_built_once_is_not_queued_again():
              {"cmd": "build", "item": "gun"}, {"cmd": "build", "item": "gun"}]
 
     assert drop_model_duplicates(model, raw) == [{"cmd": "build", "item": "gun"}]
-
-
-def test_backup_army_only_while_the_model_is_silent():
-    legal = {"combat_units": list(range(200, 212)), "attack_now": {"cmd": "attack_move", "units": [200], "to": [50, 50]}}
-    raw = _raw(buildings=READY, units=HARVESTERS, available=["e3", "1tnk", "3tnk"], legal=legal)
-
-    quiet = Autopilot().orders(raw, 0.0, model_silent=True)
-    assert {"cmd": "train", "item": "3tnk", "count": 2} in quiet
-    assert {"cmd": "train", "item": "e3", "count": 2} in quiet
-    assert legal["attack_now"] in quiet
-    raw["observation"]["economy"]["cash"] = 500  # below the idle-bank spend
-    assert not any(o["cmd"] == "train" and o["item"] == "3tnk" for o in Autopilot().orders(raw, 0.0))
 
 
 def test_idle_infantry_are_assigned_to_guard_harvesters_and_kept_from_the_model():
@@ -354,34 +332,6 @@ def test_steady_infantry_starts_with_the_first_refinery():
     assert {"cmd": "train", "item": "e1", "count": 3} in Autopilot().orders(raw, 0.0)
 
 
-def test_rockets_become_riflemen_against_an_infantry_enemy():
-    pilot = Autopilot()
-    infantry = _raw(available=["e1", "e3"])
-    infantry["observation"]["visible_enemies"] = [{"id": i, "type": "e3"} for i in range(6)]
-    pilot.orders(infantry, 0.0)  # sees them
-
-    order = [{"cmd": "train", "item": "e3", "count": 3}]
-    assert pilot.fit_to_enemy(order, infantry) == [{"cmd": "train", "item": "e1", "count": 3}]
-
-    tanky = Autopilot()
-    tanks = _raw(available=["e1", "e3"])
-    tanks["observation"]["visible_enemies"] = [{"id": i, "type": "2tnk"} for i in range(4)]
-    tanky.orders(tanks, 0.0)
-    assert tanky.fit_to_enemy(order, tanks) == order
-
-
-def test_holding_keeps_training_and_status_shows_float_time_left():
-    raw = _raw(buildings=READY, units=HARVESTERS, available=["2tnk", "e3"],
-               legal={"combat_units": list(range(200, 215)), "attack_now": {"cmd": "attack_move", "units": [200], "to": [50, 50]}})
-    raw["observation"]["military"] = {"kills_cost": 20000, "deaths_cost": 5000}
-    raw["time"] = {"remaining_seconds": 240.7}
-
-    orders = Autopilot().orders(raw, 0.0)
-    assert {"cmd": "train", "item": "2tnk", "count": 2} in orders
-    assert raw["legal_actions"]["attack_now"] not in orders
-    assert "(left 4:00)" in redalert.status_line(raw)
-
-
 def test_crushing_them_near_the_end_pushes_instead_of_holding():
     from examples.llm.redalert_autopilot import hold_lead
 
@@ -401,35 +351,6 @@ def test_crushing_them_near_the_end_pushes_instead_of_holding():
     assert hold_lead([attack], raw) == []
 
 
-def test_rockets_stay_rockets_when_the_enemy_has_tanks_too():
-    pilot = Autopilot()
-    raw = _raw(available=["e1", "e3"])
-    raw["observation"]["visible_enemies"] = [{"id": i, "type": "e3"} for i in range(10)] + [
-        {"id": 50, "type": "3tnk"}, {"id": 51, "type": "3tnk"}]
-    pilot.orders(raw, 0.0)
-    order = [{"cmd": "train", "item": "e3", "count": 3}]
-
-    assert pilot.fit_to_enemy(order, raw) == order
-
-
-def test_banked_money_buys_tanks():
-    raw = _raw(buildings=READY, units=HARVESTERS, available=["3tnk", "e3"])
-    raw["observation"]["economy"].update(cash=0, ore=4000)
-
-    assert {"cmd": "train", "item": "3tnk", "count": 2} in Autopilot().orders(raw, 0.0)
-    raw["observation"]["economy"].update(ore=500)
-    assert {"cmd": "train", "item": "3tnk", "count": 2} not in Autopilot().orders(raw, 0.0)
-
-
-def test_banked_money_never_buys_anti_air():
-    raw = _raw(buildings=READY, units=HARVESTERS, available=["ftrk", "apc", "e3"])
-    raw["observation"]["economy"].update(cash=0, ore=4000)
-
-    orders = Autopilot().orders(raw, 0.0)
-    assert not any(o.get("item") in ("ftrk", "apc") for o in orders)
-    assert {"cmd": "train", "item": "e3", "count": 2} in orders
-
-
 def test_service_depot_is_built_once_the_infantry_screen_is_up():
     few = _raw(buildings=READY, units=HARVESTERS + [{"id": 70, "type": "e1"}], available=["fix"])
     many = _raw(buildings=READY, units=HARVESTERS + [{"id": 70 + i, "type": "e1"} for i in range(12)], available=["fix"])
@@ -439,3 +360,74 @@ def test_service_depot_is_built_once_the_infantry_screen_is_up():
     assert {"cmd": "build", "item": "fix"} not in Autopilot().orders(few, 0.0)
     assert {"cmd": "build", "item": "fix"} in Autopilot().orders(many, 0.0)
     assert {"cmd": "build", "item": "fix"} not in Autopilot().orders(built, 0.0)
+
+
+
+# -- production planner -------------------------------------------------------------------
+
+
+def _seen(raw, *types):
+    raw["observation"]["visible_enemies"] = [{"id": 900 + i, "type": t} for i, t in enumerate(types)]
+    return raw
+
+
+def test_planner_answers_what_the_enemy_fields():
+    rockets = _seen(_raw(buildings=READY, units=HARVESTERS, available=["e1", "e3", "3tnk"]), *["e3"] * 8)
+    tanks = _seen(_raw(buildings=READY, units=HARVESTERS, available=["e1", "e3", "3tnk"]), *["3tnk"] * 6)
+
+    vs_rockets = Autopilot().orders(rockets, 0.0)
+    vs_tanks = Autopilot().orders(tanks, 0.0)
+
+    assert {"cmd": "train", "item": "e1", "count": 3} in vs_rockets
+    assert {"cmd": "train", "item": "e3", "count": 3} in vs_tanks
+    assert {"cmd": "train", "item": "3tnk", "count": 1} in vs_tanks
+
+
+def test_planner_never_builds_anti_air_or_transports_and_needs_money():
+    raw = _raw(buildings=READY, units=HARVESTERS, available=["ftrk", "apc", "e3"])
+    assert not any(o.get("item") in ("ftrk", "apc") for o in Autopilot().orders(raw, 0.0))
+
+    raw["observation"]["economy"].update(cash=0, ore=0)
+    from examples.llm.redalert_planner import Planner
+    assert Planner().produce(raw["observation"], {"e3"}, 0.0) == []
+
+
+def test_planner_spreads_the_army_instead_of_one_type():
+    from examples.llm.redalert_planner import Planner
+
+    planner, mix = Planner(), {"infantry": 1.0, "tank": 0.0, "light": 0.0}
+    assert planner.score("e1", mix, {"e1": 40, "e3": 2}) < planner.score("e1", mix, {"e1": 5, "e3": 5})
+
+
+def test_model_unit_choices_are_checked_against_the_enemy():
+    pilot = Autopilot()
+    infantry = _seen(_raw(available=["e1", "e3"]), *["e3"] * 8)
+    pilot.orders(infantry, 0.0)
+    assert pilot.fit_to_enemy([{"cmd": "train", "item": "e3", "count": 3}], infantry) == [
+        {"cmd": "train", "item": "e1", "count": 3}]
+
+    mixed = Autopilot()
+    tanky = _seen(_raw(available=["e1", "e3"]), *(["e3"] * 6 + ["3tnk"] * 4))
+    mixed.orders(tanky, 0.0)
+    order = [{"cmd": "train", "item": "e3", "count": 3}]
+    assert mixed.fit_to_enemy(order, tanky) == order
+
+
+def test_while_holding_the_planner_still_trains_and_status_shows_time_left():
+    raw = _raw(buildings=READY, units=HARVESTERS, available=["2tnk", "e3"],
+               legal={"combat_units": list(range(200, 215)), "attack_now": {"cmd": "attack_move", "units": [200], "to": [50, 50]}})
+    raw["observation"]["military"] = {"kills_cost": 20000, "deaths_cost": 5000}
+    raw["time"] = {"remaining_seconds": 240.7}
+
+    orders = Autopilot().orders(raw, 0.0)
+    assert any(o["cmd"] == "train" for o in orders)
+    assert raw["legal_actions"]["attack_now"] not in orders
+    assert "(left 4:00)" in redalert.status_line(raw)
+
+
+def test_a_silent_model_still_gets_the_backup_attack():
+    legal = {"combat_units": list(range(200, 212)), "attack_now": {"cmd": "attack_move", "units": [200], "to": [50, 50]}}
+    raw = _raw(buildings=READY, units=HARVESTERS, available=["3tnk"], legal=legal)
+
+    assert legal["attack_now"] in Autopilot().orders(raw, 0.0, model_silent=True)
+    assert legal["attack_now"] not in Autopilot().orders(raw, 0.0)
