@@ -65,7 +65,7 @@ NON_COMBAT = (HARVESTER, MCV, "medi", "e6", "spy", "thf")
 
 # Backup army, only while the model is silent (API down, out of credit, slow).
 MODEL_SILENT_SECONDS = 30.0
-BACKUP_TANKS = ("4tnk", "3tnk", "2tnk", "1tnk", "ftrk")  # best first
+BACKUP_TANKS = ("4tnk", "3tnk", "2tnk", "1tnk")  # best first; never anti-air or transports
 BACKUP_ATTACK_AT = 12
 SPEND_ABOVE = 1500  # cash + ore sitting idle beyond this buys tanks (a won game banked 4000 for minutes)  # idle combat units before the backup sends them in
 POWER_MARGIN = 40  # build a power plant when spare power falls below this

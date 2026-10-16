@@ -419,3 +419,12 @@ def test_banked_money_buys_tanks():
     assert {"cmd": "train", "item": "3tnk", "count": 2} in Autopilot().orders(raw, 0.0)
     raw["observation"]["economy"].update(ore=500)
     assert {"cmd": "train", "item": "3tnk", "count": 2} not in Autopilot().orders(raw, 0.0)
+
+
+def test_banked_money_never_buys_anti_air():
+    raw = _raw(buildings=READY, units=HARVESTERS, available=["ftrk", "apc", "e3"])
+    raw["observation"]["economy"].update(cash=0, ore=4000)
+
+    orders = Autopilot().orders(raw, 0.0)
+    assert not any(o.get("item") in ("ftrk", "apc") for o in orders)
+    assert {"cmd": "train", "item": "e3", "count": 2} in orders
