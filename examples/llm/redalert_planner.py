@@ -39,13 +39,14 @@ MATCHUP = {
 }
 COST = {"e1": 100, "e2": 160, "e3": 300, "e4": 300, "shok": 400, "1tnk": 700, "2tnk": 850,
         "3tnk": 1150, "4tnk": 1700, "ttnk": 1350, "arty": 600, "v2rl": 700}
+DEFAULT_VALUE = {INFANTRY_CAT: 200, TANK_CAT: 1100, LIGHT_CAT: 650}  # enemy types missing from COST
 INFANTRY_UNITS = ("e1", "e2", "e3", "e4", "shok")
 VEHICLE_UNITS = ("1tnk", "2tnk", "3tnk", "4tnk", "ttnk", "arty", "v2rl")
 
 # Before anything is seen: what this opponent has fielded (rocket floods, then tanks).
 DEFAULT_MIX = {INFANTRY_CAT: 0.6, TANK_CAT: 0.3, LIGHT_CAT: 0.1}
 ENEMY_WINDOW_SECONDS = 120.0
-REPLACE_BELOW = 0.6  # a model pick scoring under this fraction of the best is replaced
+REPLACE_BELOW = 0.85  # a model pick scoring under this fraction of the best is replaced
 BATCH = {"infantry": 3, "vehicle": 1}
 
 
@@ -59,20 +60,25 @@ def _list(value: Any) -> list[dict[str, Any]]:
 
 class Planner:
     def __init__(self) -> None:
-        self._seen: dict[int, tuple[str, float]] = {}  # enemy id -> (category, last seen)
+        self._seen: dict[int, tuple[str, float, float]] = {}  # enemy id -> (category, value, last seen)
         self.last_plan: dict[str, str | None] = {"infantry": None, "vehicle": None}
 
     def observe(self, obs: dict[str, Any], now: float) -> None:
         for e in _list(obs.get("visible_enemies")):
-            cat = CATEGORY.get(str(e.get("type", "")).lower())
+            kind = str(e.get("type", "")).lower()
+            cat = CATEGORY.get(kind)
             if cat and not e.get("wreck") and isinstance(e.get("id"), int):
-                self._seen[e["id"]] = (cat, now)
+                self._seen[e["id"]] = (cat, COST.get(kind, DEFAULT_VALUE[cat]), now)
 
     def enemy_mix(self, now: float) -> dict[str, float]:
-        recent = [c for c, t in self._seen.values() if now - t <= ENEMY_WINDOW_SECONDS]
-        if not recent:
-            return dict(DEFAULT_MIX)
-        return {c: recent.count(c) / len(recent) for c in (INFANTRY_CAT, TANK_CAT, LIGHT_CAT)}
+        """The enemy army seen recently, by share of its value: seven rocket
+        soldiers and five heavy tanks are mostly tanks, not mostly infantry."""
+        value = {INFANTRY_CAT: 0.0, TANK_CAT: 0.0, LIGHT_CAT: 0.0}
+        for cat, worth, seen in self._seen.values():
+            if now - seen <= ENEMY_WINDOW_SECONDS:
+                value[cat] += worth
+        total = sum(value.values())
+        return {c: v / total for c, v in value.items()} if total else dict(DEFAULT_MIX)
 
     def score(self, unit: str, mix: dict[str, float], ours: dict[str, int]) -> float:
         """How much this unit adds: its matchup against each enemy category,

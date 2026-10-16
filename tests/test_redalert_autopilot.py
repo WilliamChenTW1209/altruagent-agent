@@ -431,3 +431,16 @@ def test_a_silent_model_still_gets_the_backup_attack():
 
     assert legal["attack_now"] in Autopilot().orders(raw, 0.0, model_silent=True)
     assert legal["attack_now"] not in Autopilot().orders(raw, 0.0)
+
+
+def test_enemy_mix_is_weighted_by_value_so_tanks_count_for_their_cost():
+    from examples.llm.redalert_planner import Planner
+
+    planner = Planner()
+    planner.observe({"visible_enemies": [{"id": i, "type": "e3"} for i in range(7)]
+                     + [{"id": 50 + i, "type": "3tnk"} for i in range(5)]}, 0.0)
+    mix = planner.enemy_mix(0.0)
+    assert mix["tank"] > 0.7
+
+    army = {"units": [{"id": i, "type": "e1"} for i in range(40)] + [{"id": 100 + i, "type": "e3"} for i in range(10)]}
+    assert planner.best("infantry", {"e1", "e3"}, army, 0.0) == "e3"
