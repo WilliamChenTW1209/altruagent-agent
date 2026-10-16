@@ -379,3 +379,22 @@ def test_holding_keeps_training_and_status_shows_float_time_left():
     assert {"cmd": "train", "item": "2tnk", "count": 2} in orders
     assert raw["legal_actions"]["attack_now"] not in orders
     assert "(left 4:00)" in redalert.status_line(raw)
+
+
+def test_crushing_them_near_the_end_pushes_instead_of_holding():
+    from examples.llm.redalert_autopilot import hold_lead
+
+    army = [{"id": 500 + i, "type": "2tnk", "x": 5, "y": 5} for i in range(32)]
+    attack = {"cmd": "attack_move", "units": [500], "to": [80, 80]}
+    raw = _raw(buildings=READY, units=HARVESTERS + army,
+               legal={"combat_units": [500 + i for i in range(32)], "attack_now": attack})
+    raw["observation"]["military"] = {"kills_cost": 20000, "deaths_cost": 5000}
+    raw["time"] = {"remaining_seconds": 200}
+    raw["observation"]["visible_enemies"] = [{"id": 1, "type": "e3"}, {"id": 2, "type": "3tnk"}]
+
+    assert attack in Autopilot().orders(raw, 0.0)
+    assert hold_lead([attack], raw) == [attack]
+
+    raw["observation"]["visible_enemies"] = [{"id": i, "type": "3tnk"} for i in range(10)]  # a real army
+    assert attack not in Autopilot().orders(raw, 0.0)
+    assert hold_lead([attack], raw) == []

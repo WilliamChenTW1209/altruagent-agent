@@ -57,6 +57,10 @@ USELESS = ("apc", "ftrk", "jeep", "truk", "lst", "mnly", "mrj")
 # left, nothing goes out any more and the army comes home (the tiebreak wins).
 HOLD_LEAD = 5000
 HOLD_SECONDS = 300
+# ...unless we are crushing them: this many combat units, and the enemy we can
+# see is at most a quarter of that. Then the army pushes to finish the base.
+CRUSH_UNITS = 30
+CRUSH_RATIO = 4
 NON_COMBAT = (HARVESTER, MCV, "medi", "e6", "spy", "thf")
 
 # Backup army, only while the model is silent (API down, out of credit, slow).
@@ -89,6 +93,8 @@ AUTOPILOT_NOTE = (
     "depot or tech); APCs, anti-air and jeeps are never trained. Mass e1 and e3 early. "
     "When you lead by more than 5000 kill value with under 5 minutes left, code recalls the army "
     "home and drops every order that sends units away: the tiebreak already wins, so defend. "
+    "Exception: if you also have 30+ combat units and the visible enemy is at most a quarter of "
+    "that, push everything together and destroy their base (code sends idle units in too). "
     "Your job is the army and the plan: "
     "which units and defenses to build, extra production buildings and tech, scouting, and "
     "when and where to attack or retreat."
@@ -163,6 +169,10 @@ class Autopilot:
         out.extend(_free_cash_for_core(obs))
         out.extend(self._defend(obs, legal))
         out.extend(self._counter(state, obs, available, queued, now))
+        if finishing(state):
+            attack = legal.get("attack_now")
+            if isinstance(attack, dict) and len(legal.get("combat_units") or []) >= MIN_ATTACK_GROUP:
+                out.append(attack)  # every idle combat unit, together, at the enemy
         if holding_lead(state):
             out.extend(_recall(obs, self.guards | self.home_guard))
             # Keep spending while holding: more defenders, and assets_value is the
@@ -373,12 +383,32 @@ def _free_cash_for_core(obs: dict[str, Any]) -> list[dict[str, Any]]:
     return [{"cmd": "cancel", "item": tank}] if stuck and broke and tank else []
 
 
-def holding_lead(state: dict[str, Any]) -> bool:
-    """Far enough ahead on the tiebreak, close enough to the end, to stop risking it."""
+def _ahead_near_the_end(state: dict[str, Any]) -> bool:
     mil = _dict(_dict(state.get("observation")).get("military"))
     lead = (mil.get("kills_cost") or 0) - (mil.get("deaths_cost") or 0)
     left = _dict(state.get("time")).get("remaining_seconds")
     return isinstance(left, (int, float)) and left < HOLD_SECONDS and lead > HOLD_LEAD
+
+
+def crushing(state: dict[str, Any]) -> bool:
+    """So far ahead in the field that pushing is no risk: CRUSH_UNITS combat
+    units of ours, and the visible enemy army at most 1/CRUSH_RATIO of that."""
+    obs = _dict(state.get("observation"))
+    ours = sum(1 for t in _types(_list(obs.get("units"))) if t not in NON_COMBAT)
+    theirs = sum(1 for e in _list(obs.get("visible_enemies"))
+                 if not e.get("wreck") and str(e.get("type", "")).lower() not in NON_COMBAT)
+    return ours >= CRUSH_UNITS and theirs * CRUSH_RATIO <= ours
+
+
+def holding_lead(state: dict[str, Any]) -> bool:
+    """Far enough ahead on the tiebreak, close enough to the end, to stop
+    risking it, unless we are crushing them."""
+    return _ahead_near_the_end(state) and not crushing(state)
+
+
+def finishing(state: dict[str, Any]) -> bool:
+    """Ahead near the end and crushing them: go and finish the base."""
+    return _ahead_near_the_end(state) and crushing(state)
 
 
 def _recall(obs: dict[str, Any], skip: set[int]) -> list[dict[str, Any]]:
