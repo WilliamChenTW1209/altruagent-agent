@@ -66,7 +66,8 @@ NON_COMBAT = (HARVESTER, MCV, "medi", "e6", "spy", "thf")
 # Backup army, only while the model is silent (API down, out of credit, slow).
 MODEL_SILENT_SECONDS = 30.0
 BACKUP_TANKS = ("4tnk", "3tnk", "2tnk", "1tnk", "ftrk")  # best first
-BACKUP_ATTACK_AT = 12  # idle combat units before the backup sends them in
+BACKUP_ATTACK_AT = 12
+SPEND_ABOVE = 1500  # cash + ore sitting idle beyond this buys tanks (a won game banked 4000 for minutes)  # idle combat units before the backup sends them in
 POWER_MARGIN = 40  # build a power plant when spare power falls below this
 REPEAT_SECONDS = 3.0  # don't resend the same autopilot order sooner (verdicts lag)
 UNDER_ATTACK_TICKS = 25 * 6  # react to under_attack events from the last 6 s
@@ -184,6 +185,9 @@ class Autopilot:
             out.extend(_refinery_defense(obs, available, queued, building_busy))
         if REFINERY in buildings and any(b in buildings for b in BARRACKS):
             out.extend(_steady_infantry(obs, available, queued))
+        eco_now = _dict(obs.get("economy"))
+        if economy_ready(state) and (eco_now.get("cash") or 0) + (eco_now.get("ore") or 0) > SPEND_ABOVE:
+            out.extend(o for o in _backup_army(state, legal, available, queued) if o.get("cmd") == "train")
         if model_silent and not holding_lead(state):
             out.extend(_backup_army(state, legal, available, queued))
         return [o for o in out if self._fresh(o, now)]
@@ -276,7 +280,9 @@ class Autopilot:
         tanks = sum(1 for t in seen if t in TANKS)
         available = {str(i).lower() for i in _dict(state.get("observation")).get("available_production") or []}
         rifle = next((i for i in ANTI_INFANTRY if i in available), None)
-        if not rifle or infantry < 4 or infantry < 2 * tanks:
+        # Any real tank threat keeps the rockets: an all-rifle army was ground
+        # down by two heavy tanks behind a rocket-soldier screen.
+        if not rifle or infantry < 4 or infantry < 2 * tanks or tanks >= 2:
             return model_orders
         return [{**o, "item": rifle} if o.get("cmd") == "train" and str(o.get("item", "")).lower() in ROCKETS else o
                 for o in model_orders]

@@ -240,6 +240,7 @@ def test_backup_army_only_while_the_model_is_silent():
     assert {"cmd": "train", "item": "3tnk", "count": 2} in quiet
     assert {"cmd": "train", "item": "e3", "count": 2} in quiet
     assert legal["attack_now"] in quiet
+    raw["observation"]["economy"]["cash"] = 500  # below the idle-bank spend
     assert not any(o["cmd"] == "train" and o["item"] == "3tnk" for o in Autopilot().orders(raw, 0.0))
 
 
@@ -398,3 +399,23 @@ def test_crushing_them_near_the_end_pushes_instead_of_holding():
     raw["observation"]["visible_enemies"] = [{"id": i, "type": "3tnk"} for i in range(10)]  # a real army
     assert attack not in Autopilot().orders(raw, 0.0)
     assert hold_lead([attack], raw) == []
+
+
+def test_rockets_stay_rockets_when_the_enemy_has_tanks_too():
+    pilot = Autopilot()
+    raw = _raw(available=["e1", "e3"])
+    raw["observation"]["visible_enemies"] = [{"id": i, "type": "e3"} for i in range(10)] + [
+        {"id": 50, "type": "3tnk"}, {"id": 51, "type": "3tnk"}]
+    pilot.orders(raw, 0.0)
+    order = [{"cmd": "train", "item": "e3", "count": 3}]
+
+    assert pilot.fit_to_enemy(order, raw) == order
+
+
+def test_banked_money_buys_tanks():
+    raw = _raw(buildings=READY, units=HARVESTERS, available=["3tnk", "e3"])
+    raw["observation"]["economy"].update(cash=0, ore=4000)
+
+    assert {"cmd": "train", "item": "3tnk", "count": 2} in Autopilot().orders(raw, 0.0)
+    raw["observation"]["economy"].update(ore=500)
+    assert {"cmd": "train", "item": "3tnk", "count": 2} not in Autopilot().orders(raw, 0.0)
