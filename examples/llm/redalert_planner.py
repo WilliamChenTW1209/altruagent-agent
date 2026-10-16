@@ -38,14 +38,16 @@ MATCHUP = {
     "3tnk": {INFANTRY_CAT: 0.85, TANK_CAT: 1.1, LIGHT_CAT: 1.1, FLAME_CAT: 1.3},
     "4tnk": {INFANTRY_CAT: 1.1, TANK_CAT: 1.4, LIGHT_CAT: 1.3, FLAME_CAT: 1.5},
     "ttnk": {INFANTRY_CAT: 1.0, TANK_CAT: 0.9, LIGHT_CAT: 1.0, FLAME_CAT: 1.1},
+    "ctnk": {INFANTRY_CAT: 0.5, TANK_CAT: 1.25, LIGHT_CAT: 1.0, FLAME_CAT: 1.0},
+    "stnk": {INFANTRY_CAT: 0.7, TANK_CAT: 1.0, LIGHT_CAT: 1.1, FLAME_CAT: 1.0},
     "arty": {INFANTRY_CAT: 0.9, TANK_CAT: 0.35, LIGHT_CAT: 0.4, FLAME_CAT: 0.6},
     "v2rl": {INFANTRY_CAT: 0.9, TANK_CAT: 0.45, LIGHT_CAT: 0.4, FLAME_CAT: 0.6},
 }
 COST = {"e1": 100, "e2": 160, "e3": 300, "e4": 300, "shok": 400, "1tnk": 700, "2tnk": 850,
-        "3tnk": 1150, "4tnk": 1700, "ttnk": 1350, "arty": 600, "v2rl": 700}
+        "3tnk": 1150, "4tnk": 1700, "ttnk": 1350, "ctnk": 1350, "stnk": 1350, "arty": 600, "v2rl": 700}
 DEFAULT_VALUE = {INFANTRY_CAT: 200, TANK_CAT: 1100, LIGHT_CAT: 650, FLAME_CAT: 300}  # enemy types missing from COST
 INFANTRY_UNITS = ("e1", "e2", "e3", "e4", "shok")
-VEHICLE_UNITS = ("1tnk", "2tnk", "3tnk", "4tnk", "ttnk", "arty", "v2rl")
+VEHICLE_UNITS = ("1tnk", "2tnk", "3tnk", "4tnk", "ttnk", "ctnk", "stnk", "arty", "v2rl")
 
 # Before anything is seen: what this opponent has fielded (rocket floods, then tanks).
 DEFAULT_MIX = {INFANTRY_CAT: 0.6, TANK_CAT: 0.3, LIGHT_CAT: 0.1, FLAME_CAT: 0.0}

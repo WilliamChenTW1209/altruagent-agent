@@ -7,7 +7,7 @@ fixed rule does well are done here, in code, about 5 times a second:
 - place every finished building at once (a waiting building blocks its queue);
 - keep power ahead of demand;
 - the economic core: power plant, barracks, refinery, war factory, and
-  harvesters up to ``TARGET_HARVESTERS``;
+  harvesters up to ``TARGET_HARVESTERS`` (six), a third refinery, then tech;
 - send idle combat units to whatever of ours is under attack.
 
 Everything else (what army to build, when and where to attack) is the
@@ -29,8 +29,17 @@ HARVESTER = "harv"
 MCV = "mcv"
 CONSTRUCTION_YARD = "fact"
 
-TARGET_HARVESTERS = 3
+CORE_HARVESTERS = 3  # part of the economic core (economy_ready)
+TARGET_HARVESTERS = 6  # trained on after the core: more income for the late game
 TARGET_REFINERIES = 2  # each comes with a free harvester, and needs no war factory
+EXTRA_REFINERY_AT = 4  # with this many harvesters, a third refinery shortens their trips
+MAX_REFINERIES = 3
+# Tech: once the economy can carry it, build towards each side's best units
+# (heavy/mammoth and Tesla tanks, chrono and phase tanks, shock troopers...).
+# Whatever available_production offers, in this order; each is built once.
+TECH_BUILDINGS = ("dome", "atek", "stek")
+TECH_HARVESTERS = 5  # tech only with an economy this big...
+TECH_MONEY = 1500    # ...and this much cash + ore spare
 EARLY_INFANTRY = 3  # what the model may train before the economy is up
 INFANTRY = ("e1", "e2", "e3", "e4", "e6", "dog", "medi", "spy", "thf")
 TANKS = ("1tnk", "2tnk", "3tnk", "4tnk", "apc", "ftrk", "jeep", "arty", "v2rl", "ttnk", "ctnk", "stnk", "mgg", "mrj")
@@ -91,7 +100,8 @@ HOME_RADIUS = 20  # cells from base_center that count as home for defending
 AUTOPILOT_NOTE = (
     "AUTOPILOT: code already handles, on every view and without you: deploying the MCV, "
     "placing every finished building, power plants, the economic core (power plant, barracks, "
-    "two refineries, war factory) and harvesters up to 3, and sending idle combat units to defend "
+    "two refineries, war factory), harvesters up to 6, a third refinery, then the tech buildings "
+    "(radar dome, tech center) that unlock each side's best units, and sending idle combat units to defend "
     "what is under attack near home. Do NOT order those yourself. Until that core is up, your "
     "build orders and all training beyond 3 infantry are dropped, so the cash goes to the economy. "
     "Once 2tnk can be built, any 1tnk you order is trained as 2tnk. A building already queued "
@@ -185,6 +195,8 @@ class Autopilot:
         harvesters = sum(1 for t in _types(units) if t == HARVESTER)
         if REFINERY in buildings and harvesters < TARGET_HARVESTERS and HARVESTER in available and HARVESTER not in queued:
             out.append({"cmd": "train", "item": HARVESTER, "count": 1})
+        if economy_ready(state):
+            out.extend(_grow_economy_and_tech(obs, buildings, harvesters, available, queued, building_busy))
 
         out.extend(_free_cash_for_core(obs))
         out.extend(self._defend(obs, legal))
@@ -444,15 +456,34 @@ def _cell_of(event: dict[str, Any], obs: dict[str, Any]) -> tuple[int, int] | No
     return None
 
 
+def _grow_economy_and_tech(obs: dict[str, Any], buildings: list[str], harvesters: int, available: set[str],
+                           queued: set[str], building_busy: bool) -> list[dict[str, Any]]:
+    """After the core: a third refinery for the larger harvester fleet, then
+    the tech buildings that unlock each faction's strongest units."""
+    if building_busy:
+        return []
+    eco = _dict(obs.get("economy"))
+    money = (eco.get("cash") or 0) + (eco.get("ore") or 0)
+    if (harvesters >= EXTRA_REFINERY_AT and buildings.count(REFINERY) < MAX_REFINERIES
+            and REFINERY in available and REFINERY not in queued):
+        return [{"cmd": "build", "item": REFINERY}]
+    if harvesters >= TECH_HARVESTERS and money >= TECH_MONEY:
+        for tech in TECH_BUILDINGS:
+            if tech in available and tech not in buildings and tech not in queued:
+                return [{"cmd": "build", "item": tech}]
+    return []
+
+
 def _free_cash_for_core(obs: dict[str, Any]) -> list[dict[str, Any]]:
     """A core item (power, refinery, war factory, harvester) stuck in the queue with no
     money: cancel one queued tank so the cash goes to the economy first. A lost
     refinery once waited 90 s behind three queued tanks."""
     production = _list(obs.get("production"))
-    stuck = any(
-        str(p.get("item", "")).lower() in (POWER_PLANT, REFINERY, WAR_FACTORY, HARVESTER) and not p.get("ready")
-        for p in production
+    # Harvesters past the core ones don't outrank the army.
+    core = (POWER_PLANT, REFINERY, WAR_FACTORY) + (
+        (HARVESTER,) if sum(1 for t in _types(_list(obs.get("units"))) if t == HARVESTER) < CORE_HARVESTERS else ()
     )
+    stuck = any(str(p.get("item", "")).lower() in core and not p.get("ready") for p in production)
     eco = _dict(obs.get("economy"))
     broke = (eco.get("cash") or 0) + (eco.get("ore") or 0) < 100
     tank = next((str(p.get("item")).lower() for p in production if str(p.get("item", "")).lower() in TANKS), None)
@@ -600,7 +631,7 @@ def economy_ready(state: dict[str, Any]) -> bool:
     return (
         WAR_FACTORY in buildings
         and buildings.count(REFINERY) >= TARGET_REFINERIES
-        and harvesters >= TARGET_HARVESTERS
+        and harvesters >= CORE_HARVESTERS
     )
 
 

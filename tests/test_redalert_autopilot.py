@@ -70,12 +70,12 @@ def test_builds_power_when_spare_power_runs_low_and_waits_for_a_busy_queue():
 
 
 def test_trains_harvesters_up_to_the_target():
-    two = [{"id": 1, "type": "harv"}, {"id": 2, "type": "harv"}]
-    three = two + [{"id": 3, "type": "harv"}]
+    five = [{"id": i, "type": "harv"} for i in range(5)]
+    six = five + [{"id": 5, "type": "harv"}]
     base = ["fact", "powr", "barr", "proc", "weap"]
 
-    assert {"cmd": "train", "item": "harv", "count": 1} in Autopilot().orders(_raw(buildings=base, units=two, available=["harv"]), 0.0)
-    assert Autopilot().orders(_raw(buildings=base, units=three, available=["harv"]), 0.0) == []
+    assert {"cmd": "train", "item": "harv", "count": 1} in Autopilot().orders(_raw(buildings=base, units=five, available=["harv"]), 0.0)
+    assert not any(o.get("item") == "harv" for o in Autopilot().orders(_raw(buildings=base, units=six, available=["harv"]), 0.0))
 
 
 def test_sends_idle_combat_units_to_a_recent_attack_only():
@@ -498,3 +498,29 @@ def test_the_model_can_never_sell_buildings():
     model = [{"cmd": "sell", "building": 10}, {"cmd": "repair", "building": 11}]
 
     assert drop_model_duplicates(model, raw) == [{"cmd": "repair", "building": 11}]
+
+
+def test_a_third_refinery_then_tech_once_the_economy_carries_it():
+    four = HARVESTERS + [{"id": 103, "type": "harv"}]
+    raw = _raw(buildings=READY, units=four, available=["proc", "dome", "stek"])
+    assert {"cmd": "build", "item": "proc"} in Autopilot().orders(raw, 0.0)
+
+    five = four + [{"id": 104, "type": "harv"}]
+    rich = _raw(buildings=READY + ["proc"], units=five, available=["dome", "stek"])
+    assert {"cmd": "build", "item": "dome"} in Autopilot().orders(rich, 0.0)
+    after_dome = _raw(buildings=READY + ["proc", "dome"], units=five, available=["dome", "stek"])
+    assert {"cmd": "build", "item": "stek"} in Autopilot().orders(after_dome, 0.0)
+
+    poor = _raw(buildings=READY + ["proc"], units=five, available=["dome"])
+    poor["observation"]["economy"]["cash"] = 200
+    assert {"cmd": "build", "item": "dome"} not in Autopilot().orders(poor, 0.0)
+
+
+def test_planner_prefers_the_faction_specials_when_they_unlock():
+    from examples.llm.redalert_planner import Planner
+
+    obs = {"units": [], "visible_enemies": [{"id": i, "type": "2tnk"} for i in range(6)]}
+    planner = Planner()
+    planner.observe(obs, 0.0)
+    assert planner.best("vehicle", {"3tnk", "4tnk"}, obs, 0.0) == "4tnk"
+    assert planner.best("vehicle", {"2tnk", "ctnk"}, obs, 0.0) == "ctnk"
