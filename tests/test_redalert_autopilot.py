@@ -491,3 +491,10 @@ def test_tanks_are_queued_without_saving_up_and_infantry_waits_for_spare_money()
 
     obs["economy"]["ore"] = 2000
     assert any(o["item"] == "e2" for o in Planner().produce(obs, {"e2", "3tnk"}, 0.0))
+
+
+def test_the_model_can_never_sell_buildings():
+    raw = _raw(buildings=["fact", "proc"])
+    model = [{"cmd": "sell", "building": 10}, {"cmd": "repair", "building": 11}]
+
+    assert drop_model_duplicates(model, raw) == [{"cmd": "repair", "building": 11}]

@@ -103,6 +103,7 @@ AUTOPILOT_NOTE = (
     "staging point in front of the base instead, so gather the army there and attack all at once "
     "(a single scout, and raids that target a visible enemy harvester, are allowed). "
     "6 rocket soldiers (e3) stay home guarding the construction yard against tank pushes. "
+    "NEVER sell buildings: losing all buildings loses the match, and sell orders are dropped. "
     "Unit choice is planned by code from the enemy army seen in the last 2 minutes: it keeps the "
     "infantry and vehicle queues busy with what beats that mix, and a unit you order that is far "
     "worse against it is swapped for the best one. Scout so it knows what they field. "
@@ -673,6 +674,10 @@ def drop_model_duplicates(model_orders: list[dict[str, Any]], state: dict[str, A
     for order in model_orders:
         cmd, item = order.get("cmd"), str(order.get("item", "")).lower()
         if cmd in ("deploy", "place"):
+            continue
+        # Never sell: losing every building loses the match. With 8 buildings
+        # and 15 seconds left (a won game on time) the model sold them all.
+        if cmd == "sell":
             continue
         if cmd in ("build", "train") and item in core and item in queued:
             continue
