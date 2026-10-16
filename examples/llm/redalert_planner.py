@@ -15,38 +15,45 @@ from __future__ import annotations
 
 from typing import Any
 
-INFANTRY_CAT, TANK_CAT, LIGHT_CAT = "infantry", "tank", "light"
+INFANTRY_CAT, TANK_CAT, LIGHT_CAT, FLAME_CAT = "infantry", "tank", "light", "flame"
+CATEGORIES = (INFANTRY_CAT, TANK_CAT, LIGHT_CAT, FLAME_CAT)
+# Flamethrowers are their own threat: they roast massed infantry up close but
+# barely scratch armour, and tanks crush them. Twenty arrived at once.
 CATEGORY = {
-    **{t: INFANTRY_CAT for t in ("e1", "e2", "e3", "e4", "e6", "dog", "medi", "spy", "thf", "shok", "e7")},
+    **{t: INFANTRY_CAT for t in ("e1", "e2", "e3", "e6", "dog", "medi", "spy", "thf", "shok", "e7")},
+    "e4": FLAME_CAT,
     **{t: TANK_CAT for t in ("2tnk", "3tnk", "4tnk", "ttnk", "ctnk", "stnk", "qtnk")},
     **{t: LIGHT_CAT for t in ("1tnk", "jeep", "apc", "ftrk", "arty", "v2rl", "mgg", "mrj", "truk")},
 }
 
 # How well one of our units does against each enemy category (1.0 = good).
 MATCHUP = {
-    "e1": {INFANTRY_CAT: 1.0, TANK_CAT: 0.15, LIGHT_CAT: 0.4},
-    "e2": {INFANTRY_CAT: 0.9, TANK_CAT: 0.4, LIGHT_CAT: 0.6},
-    "e3": {INFANTRY_CAT: 0.25, TANK_CAT: 1.0, LIGHT_CAT: 0.9},
-    "e4": {INFANTRY_CAT: 1.3, TANK_CAT: 0.15, LIGHT_CAT: 0.3},
-    "shok": {INFANTRY_CAT: 0.8, TANK_CAT: 0.8, LIGHT_CAT: 0.8},
-    "1tnk": {INFANTRY_CAT: 0.6, TANK_CAT: 0.45, LIGHT_CAT: 0.8},
-    "2tnk": {INFANTRY_CAT: 0.75, TANK_CAT: 0.9, LIGHT_CAT: 1.0},
-    "3tnk": {INFANTRY_CAT: 0.85, TANK_CAT: 1.1, LIGHT_CAT: 1.1},
-    "4tnk": {INFANTRY_CAT: 1.1, TANK_CAT: 1.4, LIGHT_CAT: 1.3},
-    "ttnk": {INFANTRY_CAT: 1.0, TANK_CAT: 0.9, LIGHT_CAT: 1.0},
-    "arty": {INFANTRY_CAT: 0.9, TANK_CAT: 0.35, LIGHT_CAT: 0.4},
-    "v2rl": {INFANTRY_CAT: 0.9, TANK_CAT: 0.45, LIGHT_CAT: 0.4},
+    "e1": {INFANTRY_CAT: 1.0, TANK_CAT: 0.15, LIGHT_CAT: 0.4, FLAME_CAT: 0.5},
+    "e2": {INFANTRY_CAT: 0.9, TANK_CAT: 0.4, LIGHT_CAT: 0.6, FLAME_CAT: 0.6},
+    "e3": {INFANTRY_CAT: 0.25, TANK_CAT: 1.0, LIGHT_CAT: 0.9, FLAME_CAT: 0.2},
+    "e4": {INFANTRY_CAT: 1.3, TANK_CAT: 0.15, LIGHT_CAT: 0.3, FLAME_CAT: 0.6},
+    "shok": {INFANTRY_CAT: 0.8, TANK_CAT: 0.8, LIGHT_CAT: 0.8, FLAME_CAT: 0.7},
+    "1tnk": {INFANTRY_CAT: 0.6, TANK_CAT: 0.45, LIGHT_CAT: 0.8, FLAME_CAT: 0.9},
+    "2tnk": {INFANTRY_CAT: 0.75, TANK_CAT: 0.9, LIGHT_CAT: 1.0, FLAME_CAT: 1.2},
+    "3tnk": {INFANTRY_CAT: 0.85, TANK_CAT: 1.1, LIGHT_CAT: 1.1, FLAME_CAT: 1.3},
+    "4tnk": {INFANTRY_CAT: 1.1, TANK_CAT: 1.4, LIGHT_CAT: 1.3, FLAME_CAT: 1.5},
+    "ttnk": {INFANTRY_CAT: 1.0, TANK_CAT: 0.9, LIGHT_CAT: 1.0, FLAME_CAT: 1.1},
+    "arty": {INFANTRY_CAT: 0.9, TANK_CAT: 0.35, LIGHT_CAT: 0.4, FLAME_CAT: 0.6},
+    "v2rl": {INFANTRY_CAT: 0.9, TANK_CAT: 0.45, LIGHT_CAT: 0.4, FLAME_CAT: 0.6},
 }
 COST = {"e1": 100, "e2": 160, "e3": 300, "e4": 300, "shok": 400, "1tnk": 700, "2tnk": 850,
         "3tnk": 1150, "4tnk": 1700, "ttnk": 1350, "arty": 600, "v2rl": 700}
-DEFAULT_VALUE = {INFANTRY_CAT: 200, TANK_CAT: 1100, LIGHT_CAT: 650}  # enemy types missing from COST
+DEFAULT_VALUE = {INFANTRY_CAT: 200, TANK_CAT: 1100, LIGHT_CAT: 650, FLAME_CAT: 300}  # enemy types missing from COST
 INFANTRY_UNITS = ("e1", "e2", "e3", "e4", "shok")
 VEHICLE_UNITS = ("1tnk", "2tnk", "3tnk", "4tnk", "ttnk", "arty", "v2rl")
 
 # Before anything is seen: what this opponent has fielded (rocket floods, then tanks).
-DEFAULT_MIX = {INFANTRY_CAT: 0.6, TANK_CAT: 0.3, LIGHT_CAT: 0.1}
+DEFAULT_MIX = {INFANTRY_CAT: 0.6, TANK_CAT: 0.3, LIGHT_CAT: 0.1, FLAME_CAT: 0.0}
 ENEMY_WINDOW_SECONDS = 120.0
-REPLACE_BELOW = 0.85  # a model pick scoring under this fraction of the best is replaced
+REPLACE_BELOW = 0.85
+# When the best infantry is this much worse than the best vehicle (e.g. against
+# flamethrowers), the barracks stops feeding infantry into it.
+INFANTRY_SKIP_BELOW = 0.8  # a model pick scoring under this fraction of the best is replaced
 BATCH = {"infantry": 3, "vehicle": 1}
 
 
@@ -73,7 +80,7 @@ class Planner:
     def enemy_mix(self, now: float) -> dict[str, float]:
         """The enemy army seen recently, by share of its value: seven rocket
         soldiers and five heavy tanks are mostly tanks, not mostly infantry."""
-        value = {INFANTRY_CAT: 0.0, TANK_CAT: 0.0, LIGHT_CAT: 0.0}
+        value = {c: 0.0 for c in CATEGORIES}
         for cat, worth, seen in self._seen.values():
             if now - seen <= ENEMY_WINDOW_SECONDS:
                 value[cat] += worth
@@ -105,10 +112,16 @@ class Planner:
         production = _list(obs.get("production"))
         eco = _dict(obs.get("economy"))
         money = (eco.get("cash") or 0) + (eco.get("ore") or 0)
+        picks = {kind: self.best(kind, available, obs, now) for kind in ("infantry", "vehicle")}
+        self.last_plan.update(picks)
+        mix, ours = self.enemy_mix(now), _our_army(obs)
+        if picks["infantry"] and picks["vehicle"] and self.score(picks["infantry"], mix, ours) < (
+            INFANTRY_SKIP_BELOW * self.score(picks["vehicle"], mix, ours)
+        ):
+            picks["infantry"] = None  # tanks only: infantry would just feed the flamers
         out = []
-        for kind, queue in (("infantry", "Infantry"), ("vehicle", "Vehicle")):
-            pick = self.best(kind, available, obs, now)
-            self.last_plan[kind] = pick
+        for kind, queue in (("vehicle", "Vehicle"), ("infantry", "Infantry")):
+            pick = picks[kind]
             busy = any(str(p.get("queue")) == queue for p in production)
             if pick and not busy and money >= COST.get(pick, 0):
                 out.append({"cmd": "train", "item": pick, "count": BATCH[kind]})
@@ -134,7 +147,7 @@ class Planner:
 
 def _coverage(ours: dict[str, int]) -> dict[str, float]:
     """Share of our army's fighting power (matchup x credits) against each category."""
-    power = {c: sum(n * MATCHUP[u][c] * COST.get(u, 0) for u, n in ours.items()) for c in (INFANTRY_CAT, TANK_CAT, LIGHT_CAT)}
+    power = {c: sum(n * MATCHUP[u][c] * COST.get(u, 0) for u, n in ours.items()) for c in CATEGORIES}
     total = sum(power.values())
     return {c: (v / total if total else 0.0) for c, v in power.items()}
 

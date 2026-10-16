@@ -466,3 +466,16 @@ def test_units_with_nothing_they_counter_nearby_are_left_alone():
     raw["observation"]["visible_enemies"] = [{"id": 91, "type": "e1", "x": 12, "y": 10}]
 
     assert not any(o["cmd"] == "attack" for o in Autopilot().orders(raw, 0.0))
+
+
+def test_flamethrowers_are_answered_with_tanks_and_hunted_by_them():
+    flamers = _seen(_raw(buildings=READY, units=HARVESTERS, available=["e1", "e2", "e3", "3tnk"]), *["e4"] * 20)
+
+    trains = [o for o in Autopilot().orders(flamers, 0.0) if o["cmd"] == "train"]
+    assert {"cmd": "train", "item": "3tnk", "count": 1} in trains
+    assert not any(o["item"] in ("e1", "e2") for o in trains)  # no riflemen fed to them (e3: home guard)
+
+    raw = _raw(units=[{"id": 5, "type": "3tnk", "x": 10, "y": 10}])
+    raw["observation"]["visible_enemies"] = [{"id": 80, "type": "2tnk", "x": 11, "y": 10},
+                                             {"id": 81, "type": "e4", "x": 13, "y": 10}]
+    assert {"cmd": "attack", "units": [5], "target": 81} in Autopilot().orders(raw, 0.0)

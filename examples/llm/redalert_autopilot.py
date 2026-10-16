@@ -71,9 +71,10 @@ MICRO_EVERY_SECONDS = 2.0
 MICRO_MAX_UNITS = 120  # engine-command budget (200 per batch) left for the rest
 PREFERRED_TARGETS = {
     # our unit -> enemy categories it should shoot, best first
-    **{t: ("infantry", "light") for t in ("e1", "e2", "e4")},
+    **{t: ("infantry", "flame", "light") for t in ("e1", "e2", "e4")},
     "e3": ("tank", "light"),
-    **{t: ("tank", "light", "infantry") for t in ("1tnk", "2tnk", "3tnk", "4tnk", "ttnk")},
+    # Tanks hunt the flamethrowers first, before they reach our infantry.
+    **{t: ("flame", "tank", "light", "infantry") for t in ("1tnk", "2tnk", "3tnk", "4tnk", "ttnk")},
 }
 
 # Backup army, only while the model is silent (API down, out of credit, slow).
