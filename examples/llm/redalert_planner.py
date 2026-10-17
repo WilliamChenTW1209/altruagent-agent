@@ -90,6 +90,10 @@ class Planner:
         total = sum(value.values())
         return {c: v / total for c, v in value.items()} if total else dict(DEFAULT_MIX)
 
+    def enemy_value(self, now: float) -> float:
+        """What the enemy army seen in the window is worth, in credits."""
+        return sum(worth for _, worth, seen in self._seen.values() if now - seen <= ENEMY_WINDOW_SECONDS)
+
     def score(self, unit: str, mix: dict[str, float], ours: dict[str, int]) -> float:
         """How much this unit adds: its matchup against each enemy category,
         weighted by how much of that category our army does not yet cover.

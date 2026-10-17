@@ -165,14 +165,6 @@ def test_model_spending_is_gated_until_the_economy_is_up():
     assert gate_model_spending(model, ready) == model
 
 
-def test_a_harvester_attacked_far_from_home_is_defended():
-    harvester = {"id": 40, "type": "harv", "x": 80, "y": 80}
-    raw = _raw(buildings=["fact"], units=[harvester], legal={"combat_units": [21]}, tick=1000,
-               events=[{"kind": "under_attack", "tick": 995, "actor": 40}])
-
-    assert Autopilot().orders(raw, 0.0) == [{"cmd": "attack_move", "units": [21], "to": [80, 80]}]
-
-
 def test_queued_infantry_counts_toward_the_early_cap():
     from examples.llm.redalert_autopilot import gate_model_spending
 
@@ -220,19 +212,6 @@ def test_a_building_already_queued_or_built_once_is_not_queued_again():
              {"cmd": "build", "item": "gun"}, {"cmd": "build", "item": "gun"}]
 
     assert drop_model_duplicates(model, raw) == [{"cmd": "build", "item": "gun"}]
-
-
-def test_idle_infantry_are_assigned_to_guard_harvesters_and_kept_from_the_model():
-    pilot = Autopilot()
-    units = HARVESTERS + [{"id": 300 + i, "type": "e1"} for i in range(8)]
-    raw = _raw(buildings=READY, units=units, legal={"combat_units": [300 + i for i in range(8)]})
-
-    guards = [o for o in pilot.orders(raw, 0.0) if o["cmd"] == "guard"]
-
-    assert len(guards) == 6 and {o["target"] for o in guards} == {100, 101, 102}
-    attack = [{"cmd": "attack_move", "units": [300, 301, 302, 303, 304, 305, 306, 307], "to": [9, 9]}]
-    kept = pilot.strip_guards(attack)[0]["units"]
-    assert len(kept) == 2 and not set(kept) & pilot.guards
 
 
 def test_a_defense_is_built_per_refinery_and_placed_beside_it():
@@ -500,22 +479,6 @@ def test_the_model_can_never_sell_buildings():
     assert drop_model_duplicates(model, raw) == [{"cmd": "repair", "building": 11}]
 
 
-def test_a_third_refinery_then_tech_once_the_economy_carries_it():
-    four = HARVESTERS + [{"id": 103, "type": "harv"}]
-    raw = _raw(buildings=READY, units=four, available=["proc", "dome", "stek"])
-    assert {"cmd": "build", "item": "proc"} in Autopilot().orders(raw, 0.0)
-
-    five = four + [{"id": 104, "type": "harv"}]
-    rich = _raw(buildings=READY + ["proc"], units=five, available=["dome", "stek"])
-    assert {"cmd": "build", "item": "dome"} in Autopilot().orders(rich, 0.0)
-    after_dome = _raw(buildings=READY + ["proc", "dome"], units=five, available=["dome", "stek"])
-    assert {"cmd": "build", "item": "stek"} in Autopilot().orders(after_dome, 0.0)
-
-    poor = _raw(buildings=READY + ["proc"], units=five, available=["dome"])
-    poor["observation"]["economy"]["cash"] = 200
-    assert {"cmd": "build", "item": "dome"} not in Autopilot().orders(poor, 0.0)
-
-
 def test_planner_prefers_the_faction_specials_when_they_unlock():
     from examples.llm.redalert_planner import Planner
 
@@ -524,3 +487,78 @@ def test_planner_prefers_the_faction_specials_when_they_unlock():
     planner.observe(obs, 0.0)
     assert planner.best("vehicle", {"3tnk", "4tnk"}, obs, 0.0) == "4tnk"
     assert planner.best("vehicle", {"2tnk", "ctnk"}, obs, 0.0) == "ctnk"
+
+
+
+# -- post-tournament fixes ------------------------------------------------------------------
+
+
+def test_harvesters_are_defended_on_our_side_only():
+    ours = {"id": 40, "type": "harv", "x": 30, "y": 30}
+    theirs = {"id": 41, "type": "harv", "x": 85, "y": 85}
+    legal = {"combat_units": [21], "enemy_base": [90, 90]}
+    near_us = _raw(buildings=["fact"], units=[ours], legal=legal, tick=1000,
+                   events=[{"kind": "under_attack", "tick": 995, "actor": 40}])
+    near_them = _raw(buildings=["fact"], units=[theirs], legal=legal, tick=1000,
+                     events=[{"kind": "under_attack", "tick": 995, "actor": 41}])
+
+    assert {"cmd": "attack_move", "units": [21], "to": [30, 30]} in Autopilot().orders(near_us, 0.0)
+    assert not any(o["cmd"] == "attack_move" for o in Autopilot().orders(near_them, 0.0))
+
+
+def test_one_guard_per_harvester_kept_from_the_model():
+    pilot = Autopilot()
+    units = HARVESTERS + [{"id": 300 + i, "type": "e1"} for i in range(8)]
+    raw = _raw(buildings=READY, units=units, legal={"combat_units": [300 + i for i in range(8)]})
+
+    guards = [o for o in pilot.orders(raw, 0.0) if o["cmd"] == "guard" and o["target"] in (100, 101, 102)]
+
+    assert len(guards) == 3 and {o["target"] for o in guards} == {100, 101, 102}
+    attack = [{"cmd": "attack_move", "units": [300 + i for i in range(8)], "to": [9, 9]}]
+    kept = pilot.strip_guards(attack)[0]["units"]
+    assert not set(kept) & pilot.guards
+
+
+def test_third_refinery_then_tech_without_saving_up():
+    four = HARVESTERS + [{"id": 103, "type": "harv"}]
+    raw = _raw(buildings=READY, units=four, available=["proc", "dome", "stek"])
+    assert {"cmd": "build", "item": "proc"} in Autopilot().orders(raw, 0.0)
+
+    five = four + [{"id": 104, "type": "harv"}]
+    broke = _raw(buildings=READY + ["proc"], units=five, available=["dome", "stek"])
+    broke["observation"]["economy"].update(cash=0, ore=0)
+    assert {"cmd": "build", "item": "dome"} in Autopilot().orders(broke, 0.0)
+    after_dome = _raw(buildings=READY + ["proc", "dome"], units=five, available=["dome", "stek"])
+    assert {"cmd": "build", "item": "stek"} in Autopilot().orders(after_dome, 0.0)
+
+
+def test_staging_point_keeps_clear_of_refineries():
+    from examples.llm.redalert_autopilot import REFINERY_CLEARANCE, _staging
+
+    obs = {"base_center": [10, 10], "buildings": [{"type": "proc", "x": 20, "y": 10}]}
+    spot = _staging(obs, {"enemy_base": [90, 10]})
+
+    assert max(abs(spot[0] - 20), abs(spot[1] - 10)) > REFINERY_CLEARANCE
+
+
+def test_a_third_refinery_does_not_cancel_tanks():
+    raw = _raw(buildings=READY,
+               production=[{"queue": "Building", "item": "proc", "ready": False}, {"queue": "Vehicle", "item": "2tnk"}])
+    raw["observation"]["economy"].update(cash=0, ore=0)
+
+    assert not any(o["cmd"] == "cancel" for o in Autopilot().orders(raw, 0.0))
+
+
+def test_no_attack_into_a_stronger_army_seen_at_their_base():
+    pilot = Autopilot()
+    army = [{"id": 600 + i, "type": "e1"} for i in range(20)]
+    raw = _raw(units=army, legal={"enemy_base": [90, 90]})
+    raw["observation"]["visible_enemies"] = [{"id": 900 + i, "type": "2tnk", "x": 85, "y": 85} for i in range(7)]
+    pilot.orders(raw, 0.0)  # sees seven medium tanks (5950) against 2000 of riflemen
+    attack = {"cmd": "attack_move", "units": [600, 601], "to": [88, 88]}
+
+    held = pilot.attack_when_stronger([attack], raw)
+    assert held[0]["cmd"] == "move" and held[0]["to"] != [88, 88]
+
+    big = _raw(units=[{"id": 700 + i, "type": "3tnk"} for i in range(10)], legal={"enemy_base": [90, 90]})
+    assert pilot.attack_when_stronger([attack], big) == [attack]

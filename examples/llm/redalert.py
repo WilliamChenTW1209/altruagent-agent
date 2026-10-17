@@ -843,6 +843,7 @@ class RedAlertPlayer:
             model_orders = upgrade_tanks(gate_model_spending(drop_model_duplicates(decision.action["orders"], raw), raw), raw)
             model_orders = hold_lead(group_attacks(self._autopilot.strip_guards(model_orders), raw), raw)
             model_orders = self._autopilot.fit_to_enemy(model_orders, raw)
+            model_orders = self._autopilot.attack_when_stronger(model_orders, raw)
             summary = decision.reasoning_summary
         orders = (auto + model_orders)[: _limits(raw)["max_orders_per_batch"]]
         if auto:

@@ -50,8 +50,8 @@ ENEMY_MEMORY_SECONDS = 60.0  # enemies seen this recently still count toward the
 COUNTER_AT = 3  # react to an enemy type once we have seen this many
 COUNTER_BATCH = 5
 # Answers to an opponent who raids harvesters with rocket soldiers.
-GUARDS_PER_HARVESTER = 2
-MAX_GUARDS = 6
+GUARDS_PER_HARVESTER = 1  # two each crowded the refinery docks so harvesters could not unload
+MAX_GUARDS = 3
 REFINERY_DEFENSES = ("ftur", "pbox", "gun", "tsla")  # anti-infantry first
 STEADY_INFANTRY = 8  # anti-infantry kept on hand once the economy is up
 
@@ -86,6 +86,10 @@ PREFERRED_TARGETS = {
     **{t: ("flame", "tank", "light", "infantry") for t in ("1tnk", "2tnk", "3tnk", "4tnk", "ttnk")},
 }
 
+ATTACK_ADVANTAGE = 1.3  # our fighting army must be this much bigger than theirs to go in
+COST_OF = {"e1": 100, "e2": 160, "e3": 300, "e4": 300, "shok": 400, "1tnk": 700, "2tnk": 850, "3tnk": 1150,
+           "4tnk": 1700, "ttnk": 1350, "ctnk": 1350, "stnk": 1350, "arty": 600, "v2rl": 700}
+
 # Backup army, only while the model is silent (API down, out of credit, slow).
 MODEL_SILENT_SECONDS = 30.0
 BACKUP_TANKS = ("4tnk", "3tnk", "2tnk", "1tnk")  # best first; never anti-air or transports
@@ -113,6 +117,8 @@ AUTOPILOT_NOTE = (
     "staging point in front of the base instead, so gather the army there and attack all at once "
     "(a single scout, and raids that target a visible enemy harvester, are allowed). "
     "6 rocket soldiers (e3) stay home guarding the construction yard against tank pushes. "
+    "Attacks away from home are held at the staging point unless our fighting army is clearly "
+    "bigger (1.3x) than the enemy army seen in the last 2 minutes: do not walk into a massed defence. "
     "NEVER sell buildings: losing all buildings loses the match, and sell orders are dropped. "
     "Unit choice is planned by code from the enemy army seen in the last 2 minutes: it keeps the "
     "infantry and vehicle queues busy with what beats that mix, and a unit you order that is far "
@@ -151,8 +157,10 @@ class Autopilot:
         self.home_guard: set[int] = set()  # rocket soldiers kept at home
         self.planner = Planner()  # picks the units that beat the enemy army we have seen
         self._next_micro = 0.0
+        self.last_now = 0.0
 
     def orders(self, state: dict[str, Any], now: float, *, model_silent: bool = False) -> list[dict[str, Any]]:
+        self.last_now = now
         obs = _dict(state.get("observation"))
         legal = _dict(state.get("legal_actions"))
         available = {str(i).lower() for i in obs.get("available_production") or []}
@@ -260,12 +268,14 @@ class Autopilot:
             return []
         # Only what is attacked near home: a scout hit at the enemy base must not
         # pull the whole army after it.
-        # Harvesters are the exception: they are the economy, defend them anywhere.
+        # Harvesters are defended further out, but only on our side of the map:
+        # one mining by the enemy base pulled the army into their tanks, wave
+        # after wave, while the model kept ordering a retreat.
         base = obs.get("base_center")
         harvesters = {u.get("id") for u in _list(obs.get("units")) if str(u.get("type", "")).lower() == HARVESTER}
         for alert in reversed(alerts):
             cell = _cell_of(alert, obs)
-            if cell and (_near(cell, base) or _actor_id(alert) in harvesters):
+            if cell and (_near(cell, base) or (_actor_id(alert) in harvesters and _our_side(cell, base, legal))):
                 return [{"cmd": "attack_move", "units": defenders, "to": list(cell)}]
         return []
 
@@ -356,6 +366,29 @@ class Autopilot:
                 used += 1
         return [{"cmd": "attack", "units": units[:50], "target": target} for target, units in by_target.items()]
 
+    def attack_when_stronger(self, model_orders: list[dict[str, Any]], state: dict[str, Any]) -> list[dict[str, Any]]:
+        """An attack away from home goes ahead only when our fighting army is
+        clearly bigger than the enemy army seen in the last two minutes;
+        otherwise those units gather at the staging point. Twice the whole
+        army walked into tanks massed at the enemy base and arrived strung out."""
+        obs, legal = _dict(state.get("observation")), _dict(state.get("legal_actions"))
+        theirs = self.planner.enemy_value(self.last_now)
+        ours = sum(COST_OF.get(t, 0) for t in _types(_list(obs.get("units"))) if t not in NON_COMBAT)
+        if not theirs or ours >= ATTACK_ADVANTAGE * theirs:
+            return model_orders
+        base, staging = obs.get("base_center"), _staging(obs, legal)
+        enemies = {e.get("id"): e for e in _list(obs.get("visible_enemies"))}
+        out = []
+        for order in model_orders:
+            target = enemies.get(order.get("target"))
+            to = [target.get("x"), target.get("y")] if target else order.get("to")
+            away = (order.get("cmd") in ("attack_move", "attack") and staging and order.get("units")
+                    and isinstance(to, (list, tuple)) and len(to) == 2 and all(isinstance(c, int) for c in to)
+                    and not _near(tuple(to), base))
+            raid = bool(target) and str(target.get("type", "")).lower() == HARVESTER
+            out.append({"cmd": "move", "units": order["units"], "to": staging} if away and not raid else order)
+        return out
+
     def strip_guards(self, model_orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """The model's unit orders without our harvester and home guards in them."""
         kept_home = self.guards | self.home_guard
@@ -380,6 +413,7 @@ class Autopilot:
 
 MIN_ATTACK_GROUP = 8  # units that must go out together; fewer wait at the staging point
 STAGING_DISTANCE = 10  # cells from the base centre toward the enemy
+REFINERY_CLEARANCE = 5  # the staging point keeps this far from every refinery
 
 
 def _staging(obs: dict[str, Any], legal: dict[str, Any]) -> list[int] | None:
@@ -388,8 +422,16 @@ def _staging(obs: dict[str, Any], legal: dict[str, Any]) -> list[int] | None:
         return None
     dx, dy = enemy[0] - base[0], enemy[1] - base[1]
     far = max(abs(dx), abs(dy)) or 1
-    step = min(1.0, STAGING_DISTANCE / far)
-    return [int(base[0] + dx * step), int(base[1] + dy * step)]
+    refineries = [(r["x"], r["y"]) for r in _refineries(obs) if isinstance(r.get("x"), int) and isinstance(r.get("y"), int)]
+    distance = STAGING_DISTANCE
+    # Not on a refinery's doorstep: the massed army blocked the docks.
+    while True:
+        step = min(1.0, distance / far)
+        spot = [int(base[0] + dx * step), int(base[1] + dy * step)]
+        clear = not any(max(abs(spot[0] - x), abs(spot[1] - y)) <= REFINERY_CLEARANCE for x, y in refineries)
+        if clear or distance >= STAGING_DISTANCE + 12:
+            return spot
+        distance += 3
 
 
 def group_attacks(model_orders: list[dict[str, Any]], state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -419,6 +461,18 @@ def group_attacks(model_orders: list[dict[str, Any]], state: dict[str, Any]) -> 
             continue
         out.append({"cmd": "move", "units": units, "to": staging})
     return out
+
+
+def _our_side(cell: tuple[int, int], base: Any, legal: dict[str, Any]) -> bool:
+    """Closer to our base than to the enemy's start (unknown enemy base: no)."""
+    enemy = legal.get("enemy_base")
+    if not (isinstance(base, (list, tuple)) and isinstance(enemy, (list, tuple))):
+        return False
+
+    def dist(a: Any) -> int:
+        return max(abs(cell[0] - a[0]), abs(cell[1] - a[1]))
+
+    return dist(base) < dist(enemy)
 
 
 def _near(cell: tuple[int, int], base: Any) -> bool:
@@ -462,12 +516,12 @@ def _grow_economy_and_tech(obs: dict[str, Any], buildings: list[str], harvesters
     the tech buildings that unlock each faction's strongest units."""
     if building_busy:
         return []
-    eco = _dict(obs.get("economy"))
-    money = (eco.get("cash") or 0) + (eco.get("ore") or 0)
     if (harvesters >= EXTRA_REFINERY_AT and buildings.count(REFINERY) < MAX_REFINERIES
             and REFINERY in available and REFINERY not in queued):
         return [{"cmd": "build", "item": REFINERY}]
-    if harvesters >= TECH_HARVESTERS and money >= TECH_MONEY:
+    # No saving up first: production is paid as it goes, and waiting for 1500
+    # spare meant tech never came in a game we were behind in.
+    if harvesters >= TECH_HARVESTERS:
         for tech in TECH_BUILDINGS:
             if tech in available and tech not in buildings and tech not in queued:
                 return [{"cmd": "build", "item": tech}]
@@ -480,7 +534,10 @@ def _free_cash_for_core(obs: dict[str, Any]) -> list[dict[str, Any]]:
     refinery once waited 90 s behind three queued tanks."""
     production = _list(obs.get("production"))
     # Harvesters past the core ones don't outrank the army.
-    core = (POWER_PLANT, REFINERY, WAR_FACTORY) + (
+    built = _types(_list(obs.get("buildings")))
+    core = (POWER_PLANT,) + (
+        (REFINERY,) if built.count(REFINERY) < TARGET_REFINERIES else ()  # not a third one: tanks first
+    ) + ((WAR_FACTORY,) if WAR_FACTORY not in built else ()) + (
         (HARVESTER,) if sum(1 for t in _types(_list(obs.get("units"))) if t == HARVESTER) < CORE_HARVESTERS else ()
     )
     stuck = any(str(p.get("item", "")).lower() in core and not p.get("ready") for p in production)
